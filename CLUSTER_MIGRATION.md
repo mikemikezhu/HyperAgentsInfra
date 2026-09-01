@@ -138,6 +138,9 @@ test -x /path/to/persistent/project/directory/venv/bin/vllm \
 test -f /path/to/persistent/project/directory/model/Qwen3.8-27B/config.json \
     && echo "OK: Qwen model"
 
+module load apptainer/1.4.5
+apptainer --version
+
 test -s /path/to/scratch/apptainer_images/hyperagents-text-eaa0a09.sif \
     && echo "OK: Apptainer SIF"
 
