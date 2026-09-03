@@ -77,7 +77,7 @@ configure_profile() {
             worktree_path="$experiment_root/paper-review-original-full-qwen38/source"
             expected_source_sha="$common_base_sha"
             run_id="paper_review_original_full_qwen38_smoke5"
-            eval_samples="100"
+            eval_samples="50"
             sampling_mode="head"
             selection_lambda="10"
             parent_selection="score_child_prop"
@@ -477,27 +477,17 @@ elif [[ "$phase" == "checkpoint-smoke" ]]; then
         done
     done
 elif [[ "$phase" == "long-run-start" ]]; then
-    for path in "$run_output" "$private_output"
+    for path in \
+        "$run_output" \
+        "$private_output" \
+        "$train_baseline" \
+        "$val_baseline"
     do
         if [[ -e "$path" ]]; then
             echo "ERROR: formal long-run target already exists: $path" >&2
             echo "This launcher never deletes or silently reuses formal output." >&2
             exit 1
         fi
-    done
-    for baseline_dir in "$train_baseline" "$val_baseline"
-    do
-        for required_file in \
-            predictions.csv \
-            report.json \
-            eval_manifest.json \
-            measurement/token_log.jsonl
-        do
-            if [[ ! -f "$baseline_dir/$required_file" ]]; then
-                echo "ERROR: formal long run requires a complete baseline: $baseline_dir/$required_file" >&2
-                exit 1
-            fi
-        done
     done
 else
     if [[ ! -f "$run_output/archive.jsonl" ]]; then
@@ -662,7 +652,7 @@ fi
 generate_args=(
     --domains paper_review
     --eval_samples "$eval_samples"
-    --eval_workers 1
+    --eval_workers 8
     --parent_selection "$parent_selection"
     --sampling_mode "$sampling_mode"
     --eval_seed_base "$eval_seed_base"
@@ -703,7 +693,7 @@ run_initial_baseline_split() {
         --run_id "$baseline_name" \
         --domain paper_review \
         --num_samples "$eval_samples" \
-        --num_workers 1 \
+        --num_workers 8 \
         --subset "$subset" \
         --sampling_mode "$sampling_mode" \
         --eval_seed "$seed" \
@@ -835,13 +825,16 @@ elif [[ "$phase" == "checkpoint-smoke" ]]; then
     summarize_one "$profile"
     echo "FRESH_GENERATIONS_1_TO_5_AND_CHECKPOINT_COMPLETED"
 elif [[ "$phase" == "long-run-start" ]]; then
+    run_initial_baseline_split train
+    run_initial_baseline_split val
+
     echo "Starting fresh formal generations 1-$max_generation_target with token budgets ${token_budgets[*]} at $(date --iso-8601=seconds)"
     "$VIRTUAL_ENV/bin/python" generate_loop.py \
         --run_id "$run_id" \
         --max_generation "$max_generation_target" \
         --output_dir_parent "$worktree_path/outputs" \
         --token_budgets "${token_budgets[@]}" \
-        --test_eval_samples 100 \
+        --test_eval_samples 50 \
         "${generate_args[@]}"
 
     verify_search_completion "$max_generation_target"
@@ -855,7 +848,7 @@ else
         --max_generation "$max_generation_target" \
         --resume_from "$run_output" \
         --token_budgets "${token_budgets[@]}" \
-        --test_eval_samples 100 \
+        --test_eval_samples 50 \
         "${generate_args[@]}"
 
     verify_search_completion "$max_generation_target"
