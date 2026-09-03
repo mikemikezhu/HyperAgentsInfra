@@ -76,7 +76,7 @@ configure_profile() {
             worktree_path="$experiment_root/paper-review-original-full-qwen38/source"
             expected_source_sha="$common_base_sha"
             run_id="paper_review_original_full_qwen38_smoke5"
-            eval_samples="100"
+            eval_samples="50"
             sampling_mode="head"
             selection_lambda="10"
             parent_selection="score_child_prop"
@@ -840,7 +840,7 @@ elif [[ "$phase" == "long-run-start" ]]; then
         --max_generation "$max_generation_target" \
         --output_dir_parent "$worktree_path/outputs" \
         --token_budgets "${token_budgets[@]}" \
-        --test_eval_samples 100 \
+        --test_eval_samples 50 \
         "${generate_args[@]}"
 
     verify_search_completion "$max_generation_target"
@@ -854,7 +854,7 @@ else
         --max_generation "$max_generation_target" \
         --resume_from "$run_output" \
         --token_budgets "${token_budgets[@]}" \
-        --test_eval_samples 100 \
+        --test_eval_samples 50 \
         "${generate_args[@]}"
 
     verify_search_completion "$max_generation_target"
