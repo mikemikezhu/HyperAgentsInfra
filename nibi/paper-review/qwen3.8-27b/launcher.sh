@@ -661,7 +661,7 @@ fi
 generate_args=(
     --domains paper_review
     --eval_samples "$eval_samples"
-    --eval_workers 1
+    --eval_workers 8
     --parent_selection "$parent_selection"
     --sampling_mode "$sampling_mode"
     --eval_seed_base "$eval_seed_base"
@@ -702,7 +702,7 @@ run_initial_baseline_split() {
         --run_id "$baseline_name" \
         --domain paper_review \
         --num_samples "$eval_samples" \
-        --num_workers 1 \
+        --num_workers 8 \
         --subset "$subset" \
         --sampling_mode "$sampling_mode" \
         --eval_seed "$seed" \
