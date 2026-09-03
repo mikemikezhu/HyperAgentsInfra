@@ -476,27 +476,17 @@ elif [[ "$phase" == "checkpoint-smoke" ]]; then
         done
     done
 elif [[ "$phase" == "long-run-start" ]]; then
-    for path in "$run_output" "$private_output"
+    for path in \
+        "$run_output" \
+        "$private_output" \
+        "$train_baseline" \
+        "$val_baseline"
     do
         if [[ -e "$path" ]]; then
             echo "ERROR: formal long-run target already exists: $path" >&2
             echo "This launcher never deletes or silently reuses formal output." >&2
             exit 1
         fi
-    done
-    for baseline_dir in "$train_baseline" "$val_baseline"
-    do
-        for required_file in \
-            predictions.csv \
-            report.json \
-            eval_manifest.json \
-            measurement/token_log.jsonl
-        do
-            if [[ ! -f "$baseline_dir/$required_file" ]]; then
-                echo "ERROR: formal long run requires a complete baseline: $baseline_dir/$required_file" >&2
-                exit 1
-            fi
-        done
     done
 else
     if [[ ! -f "$run_output/archive.jsonl" ]]; then
@@ -834,6 +824,9 @@ elif [[ "$phase" == "checkpoint-smoke" ]]; then
     summarize_one "$profile"
     echo "FRESH_GENERATIONS_1_TO_5_AND_CHECKPOINT_COMPLETED"
 elif [[ "$phase" == "long-run-start" ]]; then
+    run_initial_baseline_split train
+    run_initial_baseline_split val
+
     echo "Starting fresh formal generations 1-$max_generation_target with token budgets ${token_budgets[*]} at $(date --iso-8601=seconds)"
     "$VIRTUAL_ENV/bin/python" generate_loop.py \
         --run_id "$run_id" \
