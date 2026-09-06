@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-# Host-only launcher for the four Paper Review Qwen3.8 profiles and their
+# Host-only launcher for the Paper Review Qwen3.8 profiles and their
 # smoke/formal phases.
 #
 # This file deliberately lives outside every source worktree.  The Apptainer
@@ -62,7 +62,9 @@ usage() {
         "Profiles:" \
         "  original-full" \
         "  original-compressed10" \
-        "  gvf-compressed10" \
+        "  gvf-compressed10-lambda1" \
+        "  gvf-compressed10-lambda5" \
+        "  gvf-compressed10-lambda10" \
         "  gvf-reason-compressed10"
 }
 
@@ -88,21 +90,45 @@ configure_profile() {
             run_id="paper_review_original_compressed10_qwen38_smoke5"
             eval_samples="10"
             sampling_mode="random_per_gen"
-            selection_lambda="1"
+            selection_lambda="10"
             parent_selection="score_child_prop"
             vllm_port="18002"
             use_gvf="0"
             skip_staged_eval="1"
             ;;
-        gvf-compressed10)
-            worktree_path="$experiment_root/paper-review-gvf-compressed10-qwen38/source"
+        gvf-compressed10-lambda1)
+            worktree_path="$experiment_root/paper-review-gvf-compressed10-lambda1-qwen38/source"
             expected_source_sha="$gvf_sha"
-            run_id="paper_review_gvf_compressed10_qwen38_smoke5"
+            run_id="paper_review_gvf_compressed10_lambda1_qwen38_smoke5"
             eval_samples="10"
             sampling_mode="random_per_gen"
             selection_lambda="1"
             parent_selection="score_child_prop"
             vllm_port="18003"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        gvf-compressed10-lambda5)
+            worktree_path="$experiment_root/paper-review-gvf-compressed10-lambda5-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_compressed10_lambda5_qwen38_smoke5"
+            eval_samples="10"
+            sampling_mode="random_per_gen"
+            selection_lambda="5"
+            parent_selection="score_child_prop"
+            vllm_port="18005"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        gvf-compressed10-lambda10)
+            worktree_path="$experiment_root/paper-review-gvf-compressed10-lambda10-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_compressed10_lambda10_qwen38_smoke5"
+            eval_samples="10"
+            sampling_mode="random_per_gen"
+            selection_lambda="10"
+            parent_selection="score_child_prop"
+            vllm_port="18006"
             use_gvf="1"
             skip_staged_eval="1"
             ;;
@@ -334,7 +360,9 @@ if [[ "${1:-}" == "summary" ]]; then
     fi
     summarize_one original-full
     summarize_one original-compressed10
-    summarize_one gvf-compressed10
+    summarize_one gvf-compressed10-lambda1
+    summarize_one gvf-compressed10-lambda5
+    summarize_one gvf-compressed10-lambda10
     summarize_one gvf-reason-compressed10
     exit 0
 fi

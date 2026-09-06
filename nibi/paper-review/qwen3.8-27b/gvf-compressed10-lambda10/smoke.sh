@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=ha-pr-gvf-c10-q38
+#SBATCH --job-name=ha-pr-gvf-c10-l10-q38
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-node=h100:2
@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-readonly launcher_path="${SLURM_SUBMIT_DIR:?Submit this script from the HyperAgentsInfra root}/fir/paper-review/qwen3.8-27b/launcher.sh"
+readonly launcher_path="${SLURM_SUBMIT_DIR:?Submit this script from the HyperAgentsInfra root}/nibi/paper-review/qwen3.8-27b/launcher.sh"
 
 if [[ ! -x "$launcher_path" ]]; then
     echo "ERROR: launcher not found: $launcher_path" >&2
@@ -19,4 +19,4 @@ if [[ ! -x "$launcher_path" ]]; then
     exit 1
 fi
 
-exec "$launcher_path" gvf-compressed10 "$@"
+exec "$launcher_path" gvf-compressed10-lambda10 "$@"

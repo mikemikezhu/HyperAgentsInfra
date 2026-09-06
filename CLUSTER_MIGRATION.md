@@ -91,7 +91,9 @@ git -C /path/to/scratch/HyperAgents/HyperAgents fetch origin \
 mkdir -p \
     /path/to/scratch/HyperAgents/experiments/paper-review-original-full-qwen38 \
     /path/to/scratch/HyperAgents/experiments/paper-review-original-compressed10-qwen38 \
-    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-qwen38 \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda1-qwen38 \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda5-qwen38 \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda10-qwen38 \
     /path/to/scratch/HyperAgents/experiments/paper-review-gvf-reason-compressed10-qwen38
 
 git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
@@ -106,7 +108,17 @@ git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
 
 git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
     --detach \
-    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-qwen38/source \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda1-qwen38/source \
+    "$GVF_SHA"
+
+git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
+    --detach \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda5-qwen38/source \
+    "$GVF_SHA"
+
+git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
+    --detach \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda10-qwen38/source \
     "$GVF_SHA"
 
 git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \

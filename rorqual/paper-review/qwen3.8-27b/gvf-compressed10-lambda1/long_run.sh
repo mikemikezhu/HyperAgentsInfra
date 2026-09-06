@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=ha-pr-gvf-c10-long-q38
+#SBATCH --job-name=ha-pr-gvf-c10-l1-long-q38
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-node=h100:2
@@ -37,7 +37,7 @@ if [[ "$#" -eq 0 ]]; then
             sbatch \
                 --parsable \
                 "${dependency[@]}" \
-                --job-name="ha-pr-a3-g${generation_range}-q38" \
+                --job-name="ha-pr-a3-l1-g${generation_range}-q38" \
                 "$script_path" \
                 "$phase" \
                 "$max_generation"
@@ -47,7 +47,7 @@ if [[ "$#" -eq 0 ]]; then
         previous_job_id="$job_id"
     done
 
-    printf 'A3: %s\n' "$job_chain"
+    printf 'A3 lambda=1: %s\n' "$job_chain"
     exit 0
 fi
 
@@ -59,4 +59,4 @@ if [[ ! -x "$launcher_path" ]]; then
     exit 1
 fi
 
-exec "$launcher_path" gvf-compressed10 "$@"
+exec "$launcher_path" gvf-compressed10-lambda1 "$@"
