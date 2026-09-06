@@ -435,19 +435,19 @@ elif [[ "$phase" == "continue" ]]; then
     fi
     verify_generation_success 1
 
-    earliest_selection_cost="$(
+    earliest_evaluation_cost="$(
         PYTHONDONTWRITEBYTECODE=1 \
         PYTHONPATH="$worktree_path" \
         "$venv_path/bin/python" -c \
-            'import sys; from measurement.token_accounting import read_selection_records; records=read_selection_records(sys.argv[1]); print(records[0]["selection_cost_tokens"] if records else "")' \
+            'import sys; from measurement.token_accounting import read_evaluation_records; records=read_evaluation_records(sys.argv[1]); print(records[0]["evaluation_cost_tokens"] if records else "")' \
             "$private_output"
     )"
-    if [[ -z "$earliest_selection_cost" ]]; then
-        echo "ERROR: calibration produced no parent-selection record." >&2
+    if [[ -z "$earliest_evaluation_cost" ]]; then
+        echo "ERROR: calibration produced no completed-evaluation record." >&2
         exit 1
     fi
-    if (( checkpoint_smoke_budget < earliest_selection_cost )); then
-        echo "ERROR: first token budget $checkpoint_smoke_budget precedes the first valid selection at $earliest_selection_cost." >&2
+    if (( checkpoint_smoke_budget < earliest_evaluation_cost )); then
+        echo "ERROR: first token budget $checkpoint_smoke_budget precedes the first usable evaluation at $earliest_evaluation_cost." >&2
         exit 1
     fi
 elif [[ "$phase" == "checkpoint-smoke" ]]; then
