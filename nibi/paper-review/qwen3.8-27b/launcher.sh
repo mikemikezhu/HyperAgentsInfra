@@ -697,7 +697,7 @@ fi
 if [[ "$use_gvf" == "1" ]]; then
     generate_args+=(
         --lineage_depth 3
-        --max_questions 8
+        --max_questions 4
         --qa_context_chars 80000
     )
 fi
