@@ -50,6 +50,8 @@ readonly -a token_budgets=(
     96000000
     192000000
 )
+readonly -a generation_checkpoints=(0 5 10 15 20 25 30)
+readonly -a search_hour_checkpoints=(2 4 6 8 10 12)
 readonly checkpoint_smoke_budget="${token_budgets[0]}"
 
 usage() {
@@ -293,7 +295,8 @@ verify_reached_checkpoints() {
 
     PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$worktree_path" \
     "$venv_path/bin/python" - "$run_output" "$private_output" "$max_genid" \
-        "$phase" "$stop_token_budget" "${checkpoint_budgets[*]}" <<'PY'
+        "$phase" "$stop_token_budget" "${checkpoint_budgets[*]}" \
+        "${generation_checkpoints[*]}" "${search_hour_checkpoints[*]}" <<'PY'
 import json
 import os
 import sys
@@ -302,13 +305,21 @@ from measurement.token_accounting import (
     cumulative_total, read_evaluation_records, scan_generation_token_totals,
 )
 
-run_output, private_dir, max_genid, phase, stop_budget, tokens = sys.argv[1:]
+run_output, private_dir, max_genid, phase, stop_budget, tokens, generations, hours = sys.argv[1:]
 with open(os.path.join(run_output, "archive.jsonl"), encoding="utf-8") as handle:
     archive = [json.loads(line) for line in handle if line.strip()][-1]
 last_generation = archive["current_genid"]
 completed = 0 if last_generation == "initial" else int(last_generation)
 cumulative = cumulative_total(scan_generation_token_totals(run_output))
 dimensions = [("T", list(map(int, tokens.split())), cumulative, "evaluation_cost_tokens", 1)]
+if phase in ("long-run-start", "long-run-resume"):
+    with open(os.path.join(private_dir, "search_time.json"), encoding="utf-8") as handle:
+        search_seconds = json.load(handle)["search_seconds"]
+    dimensions += [
+        ("G", list(map(int, generations.split())), completed, "evaluation_generation", 1),
+        ("H", list(map(float, hours.split())), search_seconds / 3600,
+         "evaluation_search_seconds", 3600),
+    ]
 records = read_evaluation_records(private_dir)
 reached_count = 0
 for prefix, budgets, reached, field, scale in dimensions:
@@ -775,6 +786,19 @@ if [[ "$use_gvf" == "1" ]]; then
     )
 fi
 
+checkpoint_args=()
+baseline_timer=()
+if [[ "$phase" == "long-run-start" || "$phase" == "long-run-resume" ]]; then
+    checkpoint_args=(
+        --generation_checkpoints "${generation_checkpoints[@]}"
+        --search_hour_checkpoints "${search_hour_checkpoints[@]}"
+    )
+    baseline_timer=(
+        "$VIRTUAL_ENV/bin/python" -m measurement.search_time
+        --private_dir "$private_output" --
+    )
+fi
+
 run_initial_baseline_split() {
     local split="$1"
     local subset="_filtered_100_${split}"
@@ -788,7 +812,7 @@ run_initial_baseline_split() {
     )"
 
     echo "Starting initial $split baseline with seed $seed at $(date --iso-8601=seconds)"
-    "$VIRTUAL_ENV/bin/python" -m domains.harness \
+    "${baseline_timer[@]}" "$VIRTUAL_ENV/bin/python" -m domains.harness \
         --output_dir "$worktree_path/outputs" \
         --run_id "$baseline_name" \
         --domain paper_review \
@@ -800,7 +824,7 @@ run_initial_baseline_split() {
         --split "$split" \
         --generation 0
 
-    "$VIRTUAL_ENV/bin/python" -m domains.report \
+    "${baseline_timer[@]}" "$VIRTUAL_ENV/bin/python" -m domains.report \
         --domain paper_review \
         --dname "$worktree_path/outputs/$baseline_name"
 }
@@ -935,6 +959,7 @@ elif [[ "$phase" == "long-run-start" ]]; then
         --output_dir_parent "$worktree_path/outputs" \
         --token_budgets "${checkpoint_budgets[@]}" \
         "${stop_args[@]}" \
+        "${checkpoint_args[@]}" \
         --test_eval_samples 50 \
         "${generate_args[@]}"
 
@@ -952,6 +977,7 @@ else
         --resume_from "$run_output" \
         --token_budgets "${checkpoint_budgets[@]}" \
         "${stop_args[@]}" \
+        "${checkpoint_args[@]}" \
         --test_eval_samples 50 \
         "${generate_args[@]}"
 

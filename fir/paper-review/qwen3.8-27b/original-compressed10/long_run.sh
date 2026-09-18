@@ -63,7 +63,7 @@ if [[ "$#" -eq 0 ]]; then
 
     previous_job_id=""
     job_chain=""
-    generation_limit="${generation_limit:-100}"
+    generation_limit="${generation_limit:-30}"
     for (( segment_start=0; segment_start < generation_limit; segment_start+=10 ))
     do
         max_generation="$((segment_start + 10))"
