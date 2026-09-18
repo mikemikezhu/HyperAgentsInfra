@@ -14,21 +14,69 @@ set -euo pipefail
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_path="$script_dir/long_run.sh"
 
+# Global limits are distinct from each job's generation endpoint.
+generation_limit=""
+stop_token_budget=""
+if [[ "${1:-}" == --* ]]; then
+    while [[ "$#" -gt 0 ]]; do
+        if [[ "$#" -lt 2 || ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Usage: bash $script_path [--max_generation <generations>] [--stop_token_budget <tokens>]" >&2
+            exit 2
+        fi
+        case "$1" in
+            --max_generation|--max-generation) generation_limit="$2" ;;
+            --stop_token_budget|--stop-token-budget) stop_token_budget="$2" ;;
+            *) echo "ERROR: unknown option: $1" >&2; exit 2 ;;
+        esac
+        shift 2
+    done
+fi
+
+if [[ -n "$stop_token_budget" ]]; then
+    first_generation_target=10
+    generation_limit_args=()
+    if [[ -n "$generation_limit" ]]; then
+        generation_limit_args=("$generation_limit")
+        if (( generation_limit < first_generation_target )); then
+            first_generation_target="$generation_limit"
+        fi
+    fi
+    readonly infra_root="$(cd -- "$script_dir/../../../.." && pwd)"
+    cd "$infra_root"
+    job_id="$(
+        sbatch \
+            --parsable \
+            --job-name="ha-pr-a3-l10-g0-$first_generation_target-q38" \
+            "$script_path" \
+            long-run-start \
+            "$first_generation_target" \
+            "$stop_token_budget" \
+            "${generation_limit_args[@]}"
+    )"
+    printf 'A3 lambda=10 token budget %s: %s\n' "$stop_token_budget" "${job_id%%;*}"
+    exit 0
+fi
+
 if [[ "$#" -eq 0 ]]; then
     readonly infra_root="$(cd -- "$script_dir/../../../.." && pwd)"
     cd "$infra_root"
 
     previous_job_id=""
     job_chain=""
-    for max_generation in 10 20 30 40 50 60 70 80 90 100
+    generation_limit="${generation_limit:-100}"
+    for (( segment_start=0; segment_start < generation_limit; segment_start+=10 ))
     do
-        if [[ "$max_generation" -eq 10 ]]; then
+        max_generation="$((segment_start + 10))"
+        if (( max_generation > generation_limit )); then
+            max_generation="$generation_limit"
+        fi
+        if [[ "$segment_start" -eq 0 ]]; then
             phase="long-run-start"
-            generation_range="0-10"
+            generation_range="0-$max_generation"
             dependency=()
         else
             phase="long-run-resume"
-            generation_range="$((max_generation - 9))-$max_generation"
+            generation_range="$((segment_start + 1))-$max_generation"
             dependency=(--dependency="afterok:${previous_job_id}")
         fi
 

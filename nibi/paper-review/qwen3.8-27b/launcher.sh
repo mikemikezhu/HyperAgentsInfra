@@ -57,8 +57,8 @@ usage() {
         "  $0 <profile> calibrate" \
         "  $0 <profile> continue" \
         "  $0 <profile> checkpoint-smoke" \
-        "  $0 <profile> long-run-start <max-generation>" \
-        "  $0 <profile> long-run-resume <max-generation>" \
+        "  $0 <profile> long-run-start <segment-end> [stop-token-budget [generation-limit]]" \
+        "  $0 <profile> long-run-resume <segment-end> [stop-token-budget [generation-limit]]" \
         "  $0 summary" \
         "" \
         "Profiles:" \
@@ -201,17 +201,31 @@ print(
 PY
 }
 
+read_cumulative_tokens() {
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH="$worktree_path" \
+    "$venv_path/bin/python" -c \
+        'import sys; from measurement.token_accounting import cumulative_total, scan_generation_token_totals; print(cumulative_total(scan_generation_token_totals(sys.argv[1])))' \
+        "$run_output"
+}
+
 verify_search_completion() {
     local max_genid="$1"
     local archive_path="$run_output/archive.jsonl"
+    local search_tokens="0"
 
-    "$venv_path/bin/python" - "$run_output" "$archive_path" "$max_genid" <<'PY'
+    if [[ -n "$stop_token_budget" ]]; then
+        search_tokens="$(read_cumulative_tokens)"
+    fi
+
+    "$venv_path/bin/python" - "$run_output" "$archive_path" "$max_genid" "$stop_token_budget" "$search_tokens" "$phase" <<'PY'
 import json
 import os
 import sys
 
-run_output, archive_path, max_genid = sys.argv[1:]
+run_output, archive_path, max_genid, stop_budget, search_tokens, phase = sys.argv[1:]
 max_genid = int(max_genid)
+budget_reached = bool(stop_budget) and int(search_tokens) >= int(stop_budget)
 
 if not os.path.isfile(archive_path):
     raise SystemExit(f"Archive is missing: {archive_path}")
@@ -219,13 +233,18 @@ if not os.path.isfile(archive_path):
 with open(archive_path, encoding="utf-8") as handle:
     records = [json.loads(line) for line in handle if line.strip()]
 
-if not records or records[-1].get("current_genid") != max_genid:
-    actual = records[-1].get("current_genid") if records else None
+actual = records[-1].get("current_genid") if records else None
+completed_genid = 0 if actual == "initial" else actual
+if (
+    not isinstance(completed_genid, int)
+    or completed_genid > max_genid
+    or (not budget_reached and completed_genid != max_genid)
+):
     raise SystemExit(
         f"Search stopped at generation {actual}; expected generation {max_genid}."
     )
 
-expected_archive = ["initial", *range(1, max_genid + 1)]
+expected_archive = ["initial", *range(1, completed_genid + 1)]
 if records[-1].get("archive") != expected_archive:
     raise SystemExit(
         "Final archive does not contain every expected generation: "
@@ -233,7 +252,7 @@ if records[-1].get("archive") != expected_archive:
     )
 
 valid_candidates = []
-for genid in range(1, max_genid + 1):
+for genid in range(1, completed_genid + 1):
     gen_dir = os.path.join(run_output, f"gen_{genid}")
     metadata_path = os.path.join(gen_dir, "metadata.json")
     patch_path = os.path.join(gen_dir, "agent_output", "model_patch.diff")
@@ -255,14 +274,14 @@ for genid in range(1, max_genid + 1):
     ):
         valid_candidates.append(genid)
 
-if not valid_candidates:
+if not valid_candidates and not stop_budget and phase not in ("long-run-start", "long-run-resume"):
     raise SystemExit(
         "Search completed, but no currently valid evaluated generation has "
         "a non-empty canonical model_patch.diff."
     )
 
 print(
-    f"SEARCH_THROUGH_GENERATION_{max_genid}_VERIFIED: "
+    f"SEARCH_THROUGH_GENERATION_{completed_genid}_VERIFIED: "
     f"valid_evaluated_candidates={valid_candidates}"
 )
 PY
@@ -270,46 +289,50 @@ PY
 
 verify_reached_checkpoints() {
     local max_genid="$1"
-    local cumulative_tokens
-    local budget
-    local checkpoint_path
-    local test_report
-    local reached_count="0"
 
-    cumulative_tokens="$(
-        PYTHONDONTWRITEBYTECODE=1 \
-        PYTHONPATH="$worktree_path" \
-        "$venv_path/bin/python" -c \
-            'import sys; from measurement.token_accounting import cumulative_total, scan_generation_token_totals; print(cumulative_total(scan_generation_token_totals(sys.argv[1])))' \
-            "$run_output"
-    )"
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$worktree_path" \
+    "$venv_path/bin/python" - "$run_output" "$private_output" "$max_genid" \
+        "$phase" "$stop_token_budget" "${checkpoint_budgets[*]}" <<'PY'
+import json
+import os
+import sys
 
-    for budget in "${token_budgets[@]}"
-    do
-        if (( budget > cumulative_tokens )); then
-            break
-        fi
+from measurement.token_accounting import (
+    cumulative_total, read_evaluation_records, scan_generation_token_totals,
+)
 
-        checkpoint_path="$private_output/checkpoints/checkpoint_T${budget}.json"
-        test_report="$private_output/private_test_results/budget_${budget}_paper_review_0/paper_review/report.json"
-
-        if [[ ! -f "$checkpoint_path" ]]; then
-            echo "ERROR: reached token budget $budget lacks a frozen checkpoint." >&2
-            exit 1
-        fi
-        if [[ ! -f "$test_report" ]]; then
-            echo "ERROR: reached token budget $budget lacks its isolated held-out test report: $test_report" >&2
-            exit 1
-        fi
-        reached_count="$((reached_count + 1))"
-    done
-
-    if [[ "$reached_count" -eq 0 ]]; then
-        echo "ERROR: first token budget $checkpoint_smoke_budget was not reached by generation $max_genid." >&2
-        exit 1
-    fi
-
-    echo "REACHED_CHECKPOINTS_VERIFIED=$reached_count"
+run_output, private_dir, max_genid, phase, stop_budget, tokens = sys.argv[1:]
+with open(os.path.join(run_output, "archive.jsonl"), encoding="utf-8") as handle:
+    archive = [json.loads(line) for line in handle if line.strip()][-1]
+last_generation = archive["current_genid"]
+completed = 0 if last_generation == "initial" else int(last_generation)
+cumulative = cumulative_total(scan_generation_token_totals(run_output))
+dimensions = [("T", list(map(int, tokens.split())), cumulative, "evaluation_cost_tokens", 1)]
+records = read_evaluation_records(private_dir)
+reached_count = 0
+for prefix, budgets, reached, field, scale in dimensions:
+    for budget in budgets:
+        if budget > reached:
+            continue
+        if not any(record.get(field, float("inf")) <= budget * scale for record in records):
+            print(f"CHECKPOINT_{prefix}{budget:g}_UNAVAILABLE: no evaluation completed within threshold")
+            continue
+        label = f"{budget:g}" if prefix == "H" else str(budget)
+        checkpoint_path = os.path.join(private_dir, "checkpoints", f"checkpoint_{prefix}{label}.json")
+        if not os.path.isfile(checkpoint_path):
+            raise SystemExit(f"Reached checkpoint lacks a frozen record: {checkpoint_path}")
+        with open(checkpoint_path, encoding="utf-8") as handle:
+            checkpoint = json.load(handle)
+        run_label = checkpoint.get("test_run_id", f"budget_{budget}")
+        report = os.path.join(private_dir, "private_test_results",
+                              f"{run_label}_paper_review_0", "paper_review", "report.json")
+        if not os.path.isfile(report):
+            raise SystemExit(f"Reached checkpoint lacks its isolated held-out test report: {report}")
+        reached_count += 1
+if reached_count == 0 and not stop_budget and phase not in ("long-run-start", "long-run-resume"):
+    raise SystemExit(f"No checkpoint was reached by generation {max_genid}.")
+print(f"REACHED_CHECKPOINTS_VERIFIED={reached_count}")
+PY
 }
 
 summarize_one() {
@@ -369,13 +392,15 @@ if [[ "${1:-}" == "summary" ]]; then
     exit 0
 fi
 
-if [[ "$#" -lt 2 || "$#" -gt 3 ]]; then
+if [[ "$#" -lt 2 || "$#" -gt 5 ]]; then
     usage >&2
     exit 2
 fi
 
 readonly profile="$1"
 readonly phase="$2"
+readonly stop_token_budget="${4:-}"
+readonly generation_limit="${5:-}"
 configure_profile "$profile"
 
 case "$phase" in
@@ -398,12 +423,28 @@ case "$phase" in
         fi
         ;;
     long-run-start|long-run-resume)
-        if [[ "$#" -ne 3 || ! "$3" =~ ^[1-9][0-9]*$ ]]; then
-            echo "ERROR: $phase requires one positive max generation." >&2
+        if [[ "$#" -lt 3 || ! "$3" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: $phase requires a positive segment endpoint and optional token/generation limits." >&2
             usage >&2
             exit 2
         fi
-        readonly max_generation_target="$3"
+        max_generation_target="$3"
+        if [[ "$#" -ge 4 ]]; then
+            if [[ ! "$stop_token_budget" =~ ^[1-9][0-9]*$ || " ${token_budgets[*]} " != *" $stop_token_budget "* ]]; then
+                echo "ERROR: stop token budget must be one of: ${token_budgets[*]}" >&2
+                exit 2
+            fi
+        fi
+        if [[ "$#" -eq 5 ]]; then
+            if [[ ! "$generation_limit" =~ ^[1-9][0-9]*$ ]]; then
+                echo "ERROR: generation limit must be a positive integer." >&2
+                exit 2
+            fi
+            if (( max_generation_target > generation_limit )); then
+                max_generation_target="$generation_limit"
+            fi
+        fi
+        readonly max_generation_target
         ;;
     *)
         echo "ERROR: unknown phase: $phase" >&2
@@ -411,6 +452,22 @@ case "$phase" in
         exit 2
         ;;
 esac
+
+checkpoint_budgets=()
+stop_args=()
+generation_limit_args=()
+for budget in "${token_budgets[@]}"
+do
+    if [[ -z "$stop_token_budget" ]] || (( budget <= stop_token_budget )); then
+        checkpoint_budgets+=("$budget")
+    fi
+done
+if [[ -n "$stop_token_budget" ]]; then
+    stop_args=(--stop_token_budget "$stop_token_budget")
+fi
+if [[ -n "$generation_limit" ]]; then
+    generation_limit_args=("$generation_limit")
+fi
 
 if [[ -z "${SLURM_JOB_ID:-}" || -z "${SLURM_TMPDIR:-}" ]]; then
     echo "ERROR: experiment phases must run inside a Slurm allocation." >&2
@@ -521,6 +578,15 @@ else
         echo "ERROR: formal long-run output cannot be resumed: $run_output" >&2
         exit 1
     fi
+    if [[ -n "$stop_token_budget" ]]; then
+        cumulative_tokens="$(read_cumulative_tokens)"
+        if (( cumulative_tokens >= stop_token_budget )); then
+            verify_search_completion "$max_generation_target"
+            verify_reached_checkpoints "$max_generation_target"
+            echo "FORMAL_LONG_RUN_TOKEN_BUDGET_${stop_token_budget}_ALREADY_COMPLETED"
+            exit 0
+        fi
+    fi
     completed_generation="$(
         "$venv_path/bin/python" -c \
             'import json, sys; records=[json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]; print(records[-1]["current_genid"] if records else "")' \
@@ -529,6 +595,12 @@ else
     if [[ ! "$completed_generation" =~ ^[0-9]+$ ]]; then
         echo "ERROR: formal long-run archive has no completed numeric generation." >&2
         exit 1
+    fi
+    if [[ -n "$generation_limit" ]] && (( completed_generation >= generation_limit )); then
+        verify_search_completion "$completed_generation"
+        verify_reached_checkpoints "$completed_generation"
+        echo "FORMAL_LONG_RUN_GENERATION_LIMIT_${generation_limit}_ALREADY_COMPLETED"
+        exit 0
     fi
     if (( completed_generation >= max_generation_target )); then
         echo "ERROR: formal long run already reached generation $completed_generation; requested target is $max_generation_target." >&2
@@ -855,12 +927,13 @@ elif [[ "$phase" == "long-run-start" ]]; then
     run_initial_baseline_split train
     run_initial_baseline_split val
 
-    echo "Starting fresh formal generations 1-$max_generation_target with token budgets ${token_budgets[*]} at $(date --iso-8601=seconds)"
+    echo "Starting fresh formal generations 1-$max_generation_target with token budgets ${checkpoint_budgets[*]} at $(date --iso-8601=seconds)"
     "$VIRTUAL_ENV/bin/python" generate_loop.py \
         --run_id "$run_id" \
         --max_generation "$max_generation_target" \
         --output_dir_parent "$worktree_path/outputs" \
-        --token_budgets "${token_budgets[@]}" \
+        --token_budgets "${checkpoint_budgets[@]}" \
+        "${stop_args[@]}" \
         --test_eval_samples 50 \
         "${generate_args[@]}"
 
@@ -868,13 +941,16 @@ elif [[ "$phase" == "long-run-start" ]]; then
     verify_reached_checkpoints "$max_generation_target"
     verify_generated_repository
     summarize_one "$profile"
-    echo "FORMAL_LONG_RUN_THROUGH_GENERATION_${max_generation_target}_COMPLETED"
+    if [[ -z "$stop_token_budget" ]]; then
+        echo "FORMAL_LONG_RUN_THROUGH_GENERATION_${max_generation_target}_COMPLETED"
+    fi
 else
-    echo "Resuming formal generations $((completed_generation + 1))-$max_generation_target with token budgets ${token_budgets[*]} at $(date --iso-8601=seconds)"
+    echo "Resuming formal generations $((completed_generation + 1))-$max_generation_target with token budgets ${checkpoint_budgets[*]} at $(date --iso-8601=seconds)"
     "$VIRTUAL_ENV/bin/python" generate_loop.py \
         --max_generation "$max_generation_target" \
         --resume_from "$run_output" \
-        --token_budgets "${token_budgets[@]}" \
+        --token_budgets "${checkpoint_budgets[@]}" \
+        "${stop_args[@]}" \
         --test_eval_samples 50 \
         "${generate_args[@]}"
 
@@ -882,13 +958,42 @@ else
     verify_reached_checkpoints "$max_generation_target"
     verify_generated_repository
     summarize_one "$profile"
-    echo "FORMAL_LONG_RUN_THROUGH_GENERATION_${max_generation_target}_COMPLETED"
+    if [[ -z "$stop_token_budget" ]]; then
+        echo "FORMAL_LONG_RUN_THROUGH_GENERATION_${max_generation_target}_COMPLETED"
+    fi
 fi
 
 if [[ -n "$(git -C "$worktree_path" status --porcelain)" ]]; then
     echo "ERROR: source worktree changed during the experiment." >&2
     git -C "$worktree_path" status --short --branch >&2
     exit 1
+fi
+
+if [[ -n "$stop_token_budget" ]]; then
+    cumulative_tokens="$(read_cumulative_tokens)"
+    if (( cumulative_tokens >= stop_token_budget )); then
+        echo "FORMAL_LONG_RUN_TOKEN_BUDGET_${stop_token_budget}_COMPLETED"
+    elif [[ -n "$generation_limit" ]] && (( max_generation_target >= generation_limit )); then
+        echo "FORMAL_LONG_RUN_GENERATION_LIMIT_${generation_limit}_COMPLETED"
+    else
+        next_generation_target="$((max_generation_target + 10))"
+        if [[ -n "$generation_limit" ]] && (( next_generation_target > generation_limit )); then
+            next_generation_target="$generation_limit"
+        fi
+        next_job_id="$(
+            cd "$infra_root"
+            sbatch \
+                --parsable \
+                --dependency="afterok:$SLURM_JOB_ID" \
+                --job-name="${SLURM_JOB_NAME%-g*}-g$((max_generation_target + 1))-$next_generation_target-q38" \
+                "$launcher_dir/$profile/long_run.sh" \
+                long-run-resume \
+                "$next_generation_target" \
+                "$stop_token_budget" \
+                "${generation_limit_args[@]}"
+        )"
+        echo "TOKEN_BUDGET_CONTINUATION_JOB=${next_job_id%%;*}"
+    fi
 fi
 
 echo "Finished at $(date --iso-8601=seconds)"
