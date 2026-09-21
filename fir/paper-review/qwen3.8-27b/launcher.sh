@@ -301,6 +301,7 @@ import json
 import os
 import sys
 
+from measurement.held_out import checkpoint_tests_complete
 from measurement.token_accounting import (
     cumulative_total, read_evaluation_records, scan_generation_token_totals,
 )
@@ -335,11 +336,8 @@ for prefix, budgets, reached, field, scale in dimensions:
             raise SystemExit(f"Reached checkpoint lacks a frozen record: {checkpoint_path}")
         with open(checkpoint_path, encoding="utf-8") as handle:
             checkpoint = json.load(handle)
-        run_label = checkpoint.get("test_run_id", f"budget_{budget}")
-        report = os.path.join(private_dir, "private_test_results",
-                              f"{run_label}_paper_review_0", "paper_review", "report.json")
-        if not os.path.isfile(report):
-            raise SystemExit(f"Reached checkpoint lacks its isolated held-out test report: {report}")
+        if not checkpoint_tests_complete(private_dir, checkpoint, ["paper_review"]):
+            raise SystemExit(f"Reached checkpoint has incomplete isolated held-out tests: {checkpoint_path}")
         reached_count += 1
 if reached_count == 0 and not stop_budget and phase not in ("long-run-start", "long-run-resume"):
     raise SystemExit(f"No checkpoint was reached by generation {max_genid}.")
@@ -590,33 +588,39 @@ else
         echo "ERROR: formal long-run output cannot be resumed: $run_output" >&2
         exit 1
     fi
-    if [[ -n "$stop_token_budget" ]]; then
-        cumulative_tokens="$(read_cumulative_tokens)"
-        if (( cumulative_tokens >= stop_token_budget )); then
-            verify_search_completion "$max_generation_target"
-            verify_reached_checkpoints "$max_generation_target"
-            echo "FORMAL_LONG_RUN_TOKEN_BUDGET_${stop_token_budget}_ALREADY_COMPLETED"
-            exit 0
-        fi
-    fi
     completed_generation="$(
         "$venv_path/bin/python" -c \
-            'import json, sys; records=[json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]; print(records[-1]["current_genid"] if records else "")' \
+            'import json, sys; records=[json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]; value=records[-1]["current_genid"] if records else ""; print(0 if value == "initial" else value)' \
             "$run_output/archive.jsonl"
     )"
     if [[ ! "$completed_generation" =~ ^[0-9]+$ ]]; then
-        echo "ERROR: formal long-run archive has no completed numeric generation." >&2
+        echo "ERROR: formal long-run archive has no completed generation." >&2
         exit 1
+    fi
+    if (( completed_generation > max_generation_target )); then
+        echo "ERROR: formal long run passed requested target $max_generation_target (generation $completed_generation)." >&2
+        exit 1
+    fi
+    search_finished=false
+    if [[ -n "$stop_token_budget" ]]; then
+        cumulative_tokens="$(read_cumulative_tokens)"
+        if (( cumulative_tokens >= stop_token_budget )); then
+            search_finished=true
+        fi
+    fi
+    if (( completed_generation == max_generation_target )); then
+        search_finished=true
     fi
     if [[ -n "$generation_limit" ]] && (( completed_generation >= generation_limit )); then
-        verify_search_completion "$completed_generation"
-        verify_reached_checkpoints "$completed_generation"
-        echo "FORMAL_LONG_RUN_GENERATION_LIMIT_${generation_limit}_ALREADY_COMPLETED"
-        exit 0
+        search_finished=true
     fi
-    if (( completed_generation >= max_generation_target )); then
-        echo "ERROR: formal long run already reached generation $completed_generation; requested target is $max_generation_target." >&2
-        exit 1
+    if [[ "$search_finished" == true ]]; then
+        verify_search_completion "$max_generation_target"
+        if verify_reached_checkpoints "$max_generation_target"; then
+            echo "FORMAL_LONG_RUN_SEARCH_AND_TESTS_ALREADY_COMPLETED"
+            exit 0
+        fi
+        echo "Search target reached; resuming incomplete held-out tests without further evolution."
     fi
 fi
 
@@ -644,6 +648,7 @@ export VLLM_USE_FLASHINFER_SAMPLER="0"
 export HYPERAGENTS_MODEL="openai/qwen3.8-27b"
 export HYPERAGENTS_TASK_MODEL="openai/qwen3.8-27b"
 export HYPERAGENTS_META_MODEL="openai/qwen3.8-27b"
+export HYPERAGENTS_TEST_MODEL_PATH="$model_path"
 export HYPERAGENTS_API_BASE="http://127.0.0.1:${vllm_port}/v1"
 export HYPERAGENTS_API_KEY="EMPTY"
 export HYPERAGENTS_MAX_TOKENS="$max_output_tokens"
@@ -961,6 +966,7 @@ elif [[ "$phase" == "long-run-start" ]]; then
         "${stop_args[@]}" \
         "${checkpoint_args[@]}" \
         --test_eval_samples 50 \
+        --test_eval_repeats 3 \
         "${generate_args[@]}"
 
     verify_search_completion "$max_generation_target"
@@ -971,7 +977,7 @@ elif [[ "$phase" == "long-run-start" ]]; then
         echo "FORMAL_LONG_RUN_THROUGH_GENERATION_${max_generation_target}_COMPLETED"
     fi
 else
-    echo "Resuming formal generations $((completed_generation + 1))-$max_generation_target with token budgets ${checkpoint_budgets[*]} at $(date --iso-8601=seconds)"
+    echo "Resuming formal search/checkpoints through generation $max_generation_target (completed: $completed_generation) with token budgets ${checkpoint_budgets[*]} at $(date --iso-8601=seconds)"
     "$VIRTUAL_ENV/bin/python" generate_loop.py \
         --max_generation "$max_generation_target" \
         --resume_from "$run_output" \
@@ -979,6 +985,7 @@ else
         "${stop_args[@]}" \
         "${checkpoint_args[@]}" \
         --test_eval_samples 50 \
+        --test_eval_repeats 3 \
         "${generate_args[@]}"
 
     verify_search_completion "$max_generation_target"
