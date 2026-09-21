@@ -67,6 +67,7 @@ usage() {
         "Profiles:" \
         "  original-full" \
         "  original-compressed10" \
+        "  structured-history-compressed10" \
         "  gvf-compressed10-lambda1" \
         "  gvf-compressed10-lambda5" \
         "  gvf-compressed10-lambda10" \
@@ -98,6 +99,18 @@ configure_profile() {
             selection_lambda="10"
             parent_selection="score_child_prop"
             vllm_port="18002"
+            use_gvf="0"
+            skip_staged_eval="1"
+            ;;
+        structured-history-compressed10)
+            worktree_path="$experiment_root/paper-review-structured-history-compressed10-qwen38/source"
+            expected_source_sha="$STRUCTURED_HISTORY_SHA"
+            run_id="paper_review_structured_history_compressed10_qwen38_smoke5"
+            eval_samples="10"
+            sampling_mode="random_per_gen"
+            selection_lambda="10"
+            parent_selection="score_child_prop"
+            vllm_port="18007"
             use_gvf="0"
             skip_staged_eval="1"
             ;;
@@ -395,6 +408,7 @@ if [[ "${1:-}" == "summary" ]]; then
     fi
     summarize_one original-full
     summarize_one original-compressed10
+    summarize_one structured-history-compressed10
     summarize_one gvf-compressed10-lambda1
     summarize_one gvf-compressed10-lambda5
     summarize_one gvf-compressed10-lambda10

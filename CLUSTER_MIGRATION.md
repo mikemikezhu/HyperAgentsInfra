@@ -86,11 +86,13 @@ source \
 
 git -C /path/to/scratch/HyperAgents/HyperAgents fetch origin \
     main \
-    gvf-hyperagents
+    gvf-hyperagents \
+    ha-structured-history
 
 mkdir -p \
     /path/to/scratch/HyperAgents/experiments/paper-review-original-full-qwen38 \
     /path/to/scratch/HyperAgents/experiments/paper-review-original-compressed10-qwen38 \
+    /path/to/scratch/HyperAgents/experiments/paper-review-structured-history-compressed10-qwen38 \
     /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda1-qwen38 \
     /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda5-qwen38 \
     /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda10-qwen38 \
@@ -105,6 +107,12 @@ git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
     --detach \
     /path/to/scratch/HyperAgents/experiments/paper-review-original-compressed10-qwen38/source \
     "$COMMON_BASE_SHA"
+
+# Pin STRUCTURED_HISTORY_SHA to the committed A5 revision first.
+git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
+    --detach \
+    /path/to/scratch/HyperAgents/experiments/paper-review-structured-history-compressed10-qwen38/source \
+    "${STRUCTURED_HISTORY_SHA:?Pin the committed A5 revision in source_shas.env}"
 
 git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
     --detach \
