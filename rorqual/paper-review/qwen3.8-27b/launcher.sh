@@ -79,7 +79,8 @@ configure_profile() {
             worktree_path="$experiment_root/paper-review-original-full-qwen38/source"
             expected_source_sha="$common_base_sha"
             run_id="paper_review_original_full_qwen38_smoke5"
-            eval_samples="50"
+            train_eval_samples="50"
+            val_eval_samples="50"
             sampling_mode="head"
             selection_lambda="10"
             parent_selection="score_child_prop"
@@ -91,7 +92,8 @@ configure_profile() {
             worktree_path="$experiment_root/paper-review-original-compressed10-qwen38/source"
             expected_source_sha="$common_base_sha"
             run_id="paper_review_original_compressed10_qwen38_smoke5"
-            eval_samples="10"
+            train_eval_samples="10"
+            val_eval_samples="50"
             sampling_mode="random_per_gen"
             selection_lambda="10"
             parent_selection="score_child_prop"
@@ -103,7 +105,8 @@ configure_profile() {
             worktree_path="$experiment_root/paper-review-structured-history-compressed10-qwen38/source"
             expected_source_sha="$STRUCTURED_HISTORY_SHA"
             run_id="paper_review_structured_history_compressed10_qwen38_smoke5"
-            eval_samples="10"
+            train_eval_samples="10"
+            val_eval_samples="50"
             sampling_mode="random_per_gen"
             selection_lambda="10"
             parent_selection="score_child_prop"
@@ -115,7 +118,8 @@ configure_profile() {
             worktree_path="$experiment_root/paper-review-gvf-compressed10-lambda1-qwen38/source"
             expected_source_sha="$gvf_sha"
             run_id="paper_review_gvf_compressed10_lambda1_qwen38_smoke5"
-            eval_samples="10"
+            train_eval_samples="10"
+            val_eval_samples="50"
             sampling_mode="random_per_gen"
             selection_lambda="1"
             parent_selection="score_child_prop"
@@ -127,7 +131,8 @@ configure_profile() {
             worktree_path="$experiment_root/paper-review-gvf-compressed10-lambda5-qwen38/source"
             expected_source_sha="$gvf_sha"
             run_id="paper_review_gvf_compressed10_lambda5_qwen38_smoke5"
-            eval_samples="10"
+            train_eval_samples="10"
+            val_eval_samples="50"
             sampling_mode="random_per_gen"
             selection_lambda="5"
             parent_selection="score_child_prop"
@@ -139,7 +144,8 @@ configure_profile() {
             worktree_path="$experiment_root/paper-review-gvf-compressed10-lambda10-qwen38/source"
             expected_source_sha="$gvf_sha"
             run_id="paper_review_gvf_compressed10_lambda10_qwen38_smoke5"
-            eval_samples="10"
+            train_eval_samples="10"
+            val_eval_samples="50"
             sampling_mode="random_per_gen"
             selection_lambda="10"
             parent_selection="score_child_prop"
@@ -151,7 +157,8 @@ configure_profile() {
             worktree_path="$experiment_root/paper-review-gvf-reason-compressed10-qwen38/source"
             expected_source_sha="$gvf_sha"
             run_id="paper_review_gvf_reason_compressed10_qwen38_smoke5"
-            eval_samples="10"
+            train_eval_samples="10"
+            val_eval_samples="10"
             sampling_mode="random_per_gen"
             selection_lambda="1"
             parent_selection="reason_gvf"
@@ -778,7 +785,8 @@ fi
 
 generate_args=(
     --domains paper_review
-    --eval_samples "$eval_samples"
+    --train_eval_samples "$train_eval_samples"
+    --val_eval_samples "$val_eval_samples"
     --eval_workers 8
     --parent_selection "$parent_selection"
     --sampling_mode "$sampling_mode"
@@ -817,6 +825,10 @@ fi
 
 run_initial_baseline_split() {
     local split="$1"
+    local num_samples="$train_eval_samples"
+    if [[ "$split" == "val" ]]; then
+        num_samples="$val_eval_samples"
+    fi
     local subset="_filtered_100_${split}"
     local baseline_name="initial_paper_review${subset}_0"
     local seed
@@ -832,7 +844,7 @@ run_initial_baseline_split() {
         --output_dir "$worktree_path/outputs" \
         --run_id "$baseline_name" \
         --domain paper_review \
-        --num_samples "$eval_samples" \
+        --num_samples "$num_samples" \
         --num_workers 8 \
         --subset "$subset" \
         --sampling_mode "$sampling_mode" \
@@ -892,7 +904,7 @@ verify_generated_repository() {
         fi
     fi
 
-    "$VIRTUAL_ENV/bin/python" - "$run_output" "$eval_samples" <<'PY'
+    "$VIRTUAL_ENV/bin/python" - "$run_output" "$val_eval_samples" <<'PY'
 import json
 import os
 import sys
