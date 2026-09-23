@@ -64,11 +64,15 @@ usage() {
         "Profiles:" \
         "  original-full" \
         "  original-compressed10" \
-        "  structured-history-compressed10" \
-        "  gvf-compressed10-lambda1" \
-        "  gvf-compressed10-lambda5" \
-        "  gvf-compressed10-lambda10" \
-        "  gvf-reason-compressed10"
+        "  structured_history" \
+        "  gvf_lambda1_sibling0" \
+        "  gvf_lambda1_sibling1" \
+        "  gvf_lambda5_sibling0" \
+        "  gvf_lambda5_sibling1" \
+        "  gvf_lambda10_sibling0" \
+        "  gvf_lambda10_sibling1" \
+        "  gvf_reason_sibling0" \
+        "  gvf_reason_sibling1"
 }
 
 configure_profile() {
@@ -101,10 +105,10 @@ configure_profile() {
             use_gvf="0"
             skip_staged_eval="1"
             ;;
-        structured-history-compressed10)
-            worktree_path="$experiment_root/paper-review-structured-history-compressed10-qwen38/source"
+        structured_history)
+            worktree_path="$experiment_root/paper-review-structured_history-qwen38/source"
             expected_source_sha="$STRUCTURED_HISTORY_SHA"
-            run_id="paper_review_structured_history_compressed10_qwen38_smoke5"
+            run_id="paper_review_structured_history_qwen38_smoke5"
             train_eval_samples="10"
             val_eval_samples="50"
             sampling_mode="random_per_gen"
@@ -114,55 +118,115 @@ configure_profile() {
             use_gvf="0"
             skip_staged_eval="1"
             ;;
-        gvf-compressed10-lambda1)
-            worktree_path="$experiment_root/paper-review-gvf-compressed10-lambda1-qwen38/source"
+        gvf_lambda1_sibling0)
+            worktree_path="$experiment_root/paper-review-gvf_lambda1_sibling0-qwen38/source"
             expected_source_sha="$gvf_sha"
-            run_id="paper_review_gvf_compressed10_lambda1_qwen38_smoke5"
+            run_id="paper_review_gvf_lambda1_sibling0_qwen38_smoke5"
             train_eval_samples="10"
             val_eval_samples="50"
             sampling_mode="random_per_gen"
             selection_lambda="1"
+            sibling_count="0"
             parent_selection="score_child_prop"
             vllm_port="18003"
             use_gvf="1"
             skip_staged_eval="1"
             ;;
-        gvf-compressed10-lambda5)
-            worktree_path="$experiment_root/paper-review-gvf-compressed10-lambda5-qwen38/source"
+        gvf_lambda1_sibling1)
+            worktree_path="$experiment_root/paper-review-gvf_lambda1_sibling1-qwen38/source"
             expected_source_sha="$gvf_sha"
-            run_id="paper_review_gvf_compressed10_lambda5_qwen38_smoke5"
+            run_id="paper_review_gvf_lambda1_sibling1_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="1"
+            sibling_count="1"
+            parent_selection="score_child_prop"
+            vllm_port="18008"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        gvf_lambda5_sibling0)
+            worktree_path="$experiment_root/paper-review-gvf_lambda5_sibling0-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_lambda5_sibling0_qwen38_smoke5"
             train_eval_samples="10"
             val_eval_samples="50"
             sampling_mode="random_per_gen"
             selection_lambda="5"
+            sibling_count="0"
             parent_selection="score_child_prop"
             vllm_port="18005"
             use_gvf="1"
             skip_staged_eval="1"
             ;;
-        gvf-compressed10-lambda10)
-            worktree_path="$experiment_root/paper-review-gvf-compressed10-lambda10-qwen38/source"
+        gvf_lambda5_sibling1)
+            worktree_path="$experiment_root/paper-review-gvf_lambda5_sibling1-qwen38/source"
             expected_source_sha="$gvf_sha"
-            run_id="paper_review_gvf_compressed10_lambda10_qwen38_smoke5"
+            run_id="paper_review_gvf_lambda5_sibling1_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="5"
+            sibling_count="1"
+            parent_selection="score_child_prop"
+            vllm_port="18009"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        gvf_lambda10_sibling0)
+            worktree_path="$experiment_root/paper-review-gvf_lambda10_sibling0-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_lambda10_sibling0_qwen38_smoke5"
             train_eval_samples="10"
             val_eval_samples="50"
             sampling_mode="random_per_gen"
             selection_lambda="10"
+            sibling_count="0"
             parent_selection="score_child_prop"
             vllm_port="18006"
             use_gvf="1"
             skip_staged_eval="1"
             ;;
-        gvf-reason-compressed10)
-            worktree_path="$experiment_root/paper-review-gvf-reason-compressed10-qwen38/source"
+        gvf_lambda10_sibling1)
+            worktree_path="$experiment_root/paper-review-gvf_lambda10_sibling1-qwen38/source"
             expected_source_sha="$gvf_sha"
-            run_id="paper_review_gvf_reason_compressed10_qwen38_smoke5"
+            run_id="paper_review_gvf_lambda10_sibling1_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="10"
+            sibling_count="1"
+            parent_selection="score_child_prop"
+            vllm_port="18010"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        gvf_reason_sibling0)
+            worktree_path="$experiment_root/paper-review-gvf_reason_sibling0-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_reason_sibling0_qwen38_smoke5"
             train_eval_samples="10"
             val_eval_samples="50"
             sampling_mode="random_per_gen"
             selection_lambda="1"
+            sibling_count="0"
             parent_selection="reason_gvf"
             vllm_port="18004"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        gvf_reason_sibling1)
+            worktree_path="$experiment_root/paper-review-gvf_reason_sibling1-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_reason_sibling1_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="1"
+            sibling_count="1"
+            parent_selection="reason_gvf"
+            vllm_port="18011"
             use_gvf="1"
             skip_staged_eval="1"
             ;;
@@ -412,11 +476,15 @@ if [[ "${1:-}" == "summary" ]]; then
     fi
     summarize_one original-full
     summarize_one original-compressed10
-    summarize_one structured-history-compressed10
-    summarize_one gvf-compressed10-lambda1
-    summarize_one gvf-compressed10-lambda5
-    summarize_one gvf-compressed10-lambda10
-    summarize_one gvf-reason-compressed10
+    summarize_one structured_history
+    summarize_one gvf_lambda1_sibling0
+    summarize_one gvf_lambda1_sibling1
+    summarize_one gvf_lambda5_sibling0
+    summarize_one gvf_lambda5_sibling1
+    summarize_one gvf_lambda10_sibling0
+    summarize_one gvf_lambda10_sibling1
+    summarize_one gvf_reason_sibling0
+    summarize_one gvf_reason_sibling1
     exit 0
 fi
 
@@ -805,7 +873,7 @@ fi
 if [[ "$use_gvf" == "1" ]]; then
     generate_args+=(
         --lineage_depth 3
-        --sibling_count "${HYPERAGENTS_SIBLING_COUNT:-0}"
+        --sibling_count "$sibling_count"
         --max_questions 4
         --qa_context_chars 80000
     )

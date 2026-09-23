@@ -25,7 +25,7 @@ readonly infra_root="$SLURM_SUBMIT_DIR"
 source "$infra_root/source_shas.env"
 case "$profile" in
     original-compressed10) expected_sha="$COMMON_BASE_SHA" ;;
-    gvf-compressed10-lambda1|gvf-compressed10-lambda5|gvf-compressed10-lambda10|gvf-reason-compressed10)
+    gvf_lambda1_sibling0|gvf_lambda1_sibling1|gvf_lambda5_sibling0|gvf_lambda5_sibling1|gvf_lambda10_sibling0|gvf_lambda10_sibling1|gvf_reason_sibling0|gvf_reason_sibling1)
         expected_sha="$GVF_SHA" ;;
     *) echo "ERROR: unsupported diagnostic profile: $profile" >&2; exit 2 ;;
 esac

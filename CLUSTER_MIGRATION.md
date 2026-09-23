@@ -92,11 +92,15 @@ git -C /path/to/scratch/HyperAgents/HyperAgents fetch origin \
 mkdir -p \
     /path/to/scratch/HyperAgents/experiments/paper-review-original-full-qwen38 \
     /path/to/scratch/HyperAgents/experiments/paper-review-original-compressed10-qwen38 \
-    /path/to/scratch/HyperAgents/experiments/paper-review-structured-history-compressed10-qwen38 \
-    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda1-qwen38 \
-    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda5-qwen38 \
-    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda10-qwen38 \
-    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-reason-compressed10-qwen38
+    /path/to/scratch/HyperAgents/experiments/paper-review-structured_history-qwen38 \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_lambda1_sibling0-qwen38 \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_lambda1_sibling1-qwen38 \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_lambda5_sibling0-qwen38 \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_lambda5_sibling1-qwen38 \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_lambda10_sibling0-qwen38 \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_lambda10_sibling1-qwen38 \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_reason_sibling0-qwen38 \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_reason_sibling1-qwen38
 
 git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
     --detach \
@@ -111,27 +115,47 @@ git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
 # Pin STRUCTURED_HISTORY_SHA to the committed A5 revision first.
 git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
     --detach \
-    /path/to/scratch/HyperAgents/experiments/paper-review-structured-history-compressed10-qwen38/source \
+    /path/to/scratch/HyperAgents/experiments/paper-review-structured_history-qwen38/source \
     "${STRUCTURED_HISTORY_SHA:?Pin the committed A5 revision in source_shas.env}"
 
 git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
     --detach \
-    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda1-qwen38/source \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_lambda1_sibling0-qwen38/source \
     "$GVF_SHA"
 
 git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
     --detach \
-    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda5-qwen38/source \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_lambda1_sibling1-qwen38/source \
     "$GVF_SHA"
 
 git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
     --detach \
-    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-compressed10-lambda10-qwen38/source \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_lambda5_sibling0-qwen38/source \
     "$GVF_SHA"
 
 git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
     --detach \
-    /path/to/scratch/HyperAgents/experiments/paper-review-gvf-reason-compressed10-qwen38/source \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_lambda5_sibling1-qwen38/source \
+    "$GVF_SHA"
+
+git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
+    --detach \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_lambda10_sibling0-qwen38/source \
+    "$GVF_SHA"
+
+git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
+    --detach \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_lambda10_sibling1-qwen38/source \
+    "$GVF_SHA"
+
+git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
+    --detach \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_reason_sibling0-qwen38/source \
+    "$GVF_SHA"
+
+git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
+    --detach \
+    /path/to/scratch/HyperAgents/experiments/paper-review-gvf_reason_sibling1-qwen38/source \
     "$GVF_SHA"
 ```
 
@@ -181,7 +205,7 @@ cd /path/to/scratch/HyperAgents/HyperAgentsInfra
 
 sbatch \
     --time=08:00:00 \
-    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-or-rorqual>/paper-review/qwen3.8-27b/gvf-reason-compressed10/smoke.sh" \
+    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-or-rorqual>/paper-review/qwen3.8-27b/gvf_reason_sibling0/smoke.sh" \
     calibrate
 
 squeue \
