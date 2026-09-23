@@ -161,7 +161,7 @@ configure_profile() {
             expected_source_sha="$gvf_sha"
             run_id="paper_review_gvf_reason_compressed10_qwen38_smoke5"
             train_eval_samples="10"
-            val_eval_samples="10"
+            val_eval_samples="50"
             sampling_mode="random_per_gen"
             selection_lambda="1"
             parent_selection="reason_gvf"
