@@ -5,7 +5,7 @@
 #SBATCH --gpus-per-node=h100:2
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=96G
-#SBATCH --time=3-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --account=rrg-bengioy-ad
 #SBATCH --output=%x-%j.out
 
