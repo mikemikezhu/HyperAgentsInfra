@@ -30,7 +30,7 @@ there rather than copying another cluster's venv. Default paths are:
 | Asset | Default path | Optional override |
 | --- | --- | --- |
 | Experiment worktrees | `$SCRATCH/HyperAgents/experiments` | `HYPERAGENTS_EXPERIMENT_ROOT` |
-| Python/vLLM venv | `$SCRATCH/HyperAgents/venv` | `HYPERAGENTS_VENV_PATH` |
+| Python/vLLM venv | `/project/rrg-bengioy-ad/mikezhu/venv` | `HYPERAGENTS_VENV_PATH` |
 | Model | `$SCRATCH/HyperAgents/model/Qwen3.8-27B` | `HYPERAGENTS_MODEL_PATH` |
 | Container | `$SCRATCH/apptainer_images/hyperagents-text-eaa0a09.sif` | `HYPERAGENTS_APPTAINER_IMAGE` |
 
