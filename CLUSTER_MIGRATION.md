@@ -1,5 +1,8 @@
 # Cluster Migration
 
+For Trillium's paths, full-node GPU request and login-submitted five-generation
+chains, also follow [Trillium Paper Review](trillium/README.md).
+
 ## 1. Clone repositories
 
 ```bash
@@ -165,10 +168,10 @@ git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
 cd /path/to/scratch/HyperAgents/HyperAgentsInfra
 
 bash -n \
-    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-or-rorqual>/paper-review/qwen3.8-27b/launcher.sh"
+    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-rorqual-or-trillium>/paper-review/qwen3.8-27b/launcher.sh"
 
 for script_path in \
-    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-or-rorqual>"/paper-review/qwen3.8-27b/*/*.sh
+    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-rorqual-or-trillium>"/paper-review/qwen3.8-27b/*/*.sh
 do
     bash -n "$script_path"
 done
@@ -205,7 +208,7 @@ cd /path/to/scratch/HyperAgents/HyperAgentsInfra
 
 sbatch \
     --time=08:00:00 \
-    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-or-rorqual>/paper-review/qwen3.8-27b/gvf_reason_sibling0/smoke.sh" \
+    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-rorqual-or-trillium>/paper-review/qwen3.8-27b/gvf_reason_sibling0/smoke.sh" \
     calibrate
 
 squeue \

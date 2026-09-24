@@ -1,0 +1,1118 @@
+#!/bin/bash
+#SBATCH --job-name=ha-q38-smoke
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gpus-per-node=4
+#SBATCH --time=1-00:00:00
+#SBATCH --account=rrg-bengioy-ad
+#SBATCH --output=%x-%j.out
+
+set -euo pipefail
+
+# Host-only launcher for the Paper Review Qwen3.8 profiles and their
+# smoke/formal phases.
+#
+# This file deliberately lives outside every source worktree.  The Apptainer
+# backend uses --containall and binds only the generated repository and its
+# private runtime directory, so neither MetaAgent nor TaskAgent can read or
+# modify this launcher.
+
+readonly launcher_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly infra_root="$(cd -- "$launcher_dir/../../.." && pwd)"
+
+# The source SHAs are shared by every Trillium profile and deliberately versioned
+# outside the agent-visible HyperAgents source worktrees.
+source "$infra_root/source_shas.env"
+
+: "${COMMON_BASE_SHA:?COMMON_BASE_SHA is missing from source_shas.env}"
+: "${GVF_SHA:?GVF_SHA is missing from source_shas.env}"
+: "${SCRATCH:?Trillium must provide SCRATCH}"
+readonly common_base_sha="$COMMON_BASE_SHA"
+readonly gvf_sha="$GVF_SHA"
+readonly experiment_root="${HYPERAGENTS_EXPERIMENT_ROOT:-$SCRATCH/HyperAgents/experiments}"
+readonly venv_path="${HYPERAGENTS_VENV_PATH:-$SCRATCH/HyperAgents/venv}"
+readonly model_path="${HYPERAGENTS_MODEL_PATH:-$SCRATCH/HyperAgents/model/Qwen3.8-27B}"
+readonly apptainer_image="${HYPERAGENTS_APPTAINER_IMAGE:-$SCRATCH/apptainer_images/hyperagents-text-eaa0a09.sif}"
+readonly eval_seed_base="paper-review-qwen38-smoke-seed-0"
+readonly max_model_len="262144"
+readonly max_output_tokens="16384"
+readonly max_num_seqs="16"
+readonly eval_workers="16"
+readonly request_timeout_seconds="3600"
+readonly -a token_budgets=(
+    6000000
+    12000000
+    24000000
+    48000000
+    96000000
+    192000000
+)
+readonly -a generation_checkpoints=(0 5 10 15 20 25 30)
+readonly -a search_hour_checkpoints=(2 4 6 8 10 12)
+readonly checkpoint_smoke_budget="${token_budgets[0]}"
+
+usage() {
+    printf '%s\n' \
+        "Usage:" \
+        "  $0 <profile> calibrate" \
+        "  $0 <profile> continue" \
+        "  $0 <profile> checkpoint-smoke" \
+        "  $0 <profile> long-run-start <segment-end> [stop-token-budget [generation-limit]]" \
+        "  $0 <profile> long-run-resume <segment-end> [stop-token-budget [generation-limit]]" \
+        "  $0 summary" \
+        "" \
+        "Profiles:" \
+        "  original-full" \
+        "  original-compressed10" \
+        "  structured_history" \
+        "  gvf_lambda1_sibling0" \
+        "  gvf_lambda1_sibling1" \
+        "  gvf_lambda5_sibling0" \
+        "  gvf_lambda5_sibling1" \
+        "  gvf_lambda10_sibling0" \
+        "  gvf_lambda10_sibling1" \
+        "  gvf_reason_sibling0" \
+        "  gvf_reason_sibling1"
+}
+
+configure_profile() {
+    local requested_profile="$1"
+
+    case "$requested_profile" in
+        original-full)
+            worktree_path="$experiment_root/paper-review-original-full-qwen38/source"
+            expected_source_sha="$common_base_sha"
+            run_id="paper_review_original_full_qwen38_smoke5"
+            train_eval_samples="50"
+            val_eval_samples="50"
+            sampling_mode="head"
+            selection_lambda="10"
+            parent_selection="score_child_prop"
+            vllm_port="18001"
+            use_gvf="0"
+            skip_staged_eval="0"
+            ;;
+        original-compressed10)
+            worktree_path="$experiment_root/paper-review-original-compressed10-qwen38/source"
+            expected_source_sha="$common_base_sha"
+            run_id="paper_review_original_compressed10_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="10"
+            parent_selection="score_child_prop"
+            vllm_port="18002"
+            use_gvf="0"
+            skip_staged_eval="1"
+            ;;
+        structured_history)
+            worktree_path="$experiment_root/paper-review-structured_history-qwen38/source"
+            expected_source_sha="$STRUCTURED_HISTORY_SHA"
+            run_id="paper_review_structured_history_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="10"
+            parent_selection="score_child_prop"
+            vllm_port="18007"
+            use_gvf="0"
+            skip_staged_eval="1"
+            ;;
+        gvf_lambda1_sibling0)
+            worktree_path="$experiment_root/paper-review-gvf_lambda1_sibling0-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_lambda1_sibling0_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="1"
+            sibling_count="0"
+            parent_selection="score_child_prop"
+            vllm_port="18003"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        gvf_lambda1_sibling1)
+            worktree_path="$experiment_root/paper-review-gvf_lambda1_sibling1-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_lambda1_sibling1_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="1"
+            sibling_count="1"
+            parent_selection="score_child_prop"
+            vllm_port="18008"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        gvf_lambda5_sibling0)
+            worktree_path="$experiment_root/paper-review-gvf_lambda5_sibling0-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_lambda5_sibling0_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="5"
+            sibling_count="0"
+            parent_selection="score_child_prop"
+            vllm_port="18005"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        gvf_lambda5_sibling1)
+            worktree_path="$experiment_root/paper-review-gvf_lambda5_sibling1-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_lambda5_sibling1_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="5"
+            sibling_count="1"
+            parent_selection="score_child_prop"
+            vllm_port="18009"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        gvf_lambda10_sibling0)
+            worktree_path="$experiment_root/paper-review-gvf_lambda10_sibling0-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_lambda10_sibling0_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="10"
+            sibling_count="0"
+            parent_selection="score_child_prop"
+            vllm_port="18006"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        gvf_lambda10_sibling1)
+            worktree_path="$experiment_root/paper-review-gvf_lambda10_sibling1-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_lambda10_sibling1_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="10"
+            sibling_count="1"
+            parent_selection="score_child_prop"
+            vllm_port="18010"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        gvf_reason_sibling0)
+            worktree_path="$experiment_root/paper-review-gvf_reason_sibling0-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_reason_sibling0_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="1"
+            sibling_count="0"
+            parent_selection="reason_gvf"
+            vllm_port="18004"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        gvf_reason_sibling1)
+            worktree_path="$experiment_root/paper-review-gvf_reason_sibling1-qwen38/source"
+            expected_source_sha="$gvf_sha"
+            run_id="paper_review_gvf_reason_sibling1_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            selection_lambda="1"
+            sibling_count="1"
+            parent_selection="reason_gvf"
+            vllm_port="18011"
+            use_gvf="1"
+            skip_staged_eval="1"
+            ;;
+        *)
+            echo "ERROR: unknown profile: $requested_profile" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+
+    if [[ "${phase:-}" == "checkpoint-smoke" ]]; then
+        run_id="${run_id}_checkpoint_T${checkpoint_smoke_budget}"
+    elif [[ "${phase:-}" == "long-run-start" || "${phase:-}" == "long-run-resume" ]]; then
+        run_id="${run_id%_smoke5}_long_run1"
+    fi
+
+    run_output="$worktree_path/outputs/generate_${run_id}"
+    private_output="${run_output}_private"
+    train_baseline="$worktree_path/outputs/initial_paper_review_filtered_100_train_0"
+    val_baseline="$worktree_path/outputs/initial_paper_review_filtered_100_val_0"
+}
+
+verify_generation_success() {
+    local genid="$1"
+    local gen_dir="$run_output/gen_${genid}"
+    local metadata_path="$gen_dir/metadata.json"
+    local patch_path="$gen_dir/agent_output/model_patch.diff"
+
+    "$venv_path/bin/python" - "$metadata_path" "$patch_path" "$genid" <<'PY'
+import json
+import os
+import sys
+
+metadata_path, patch_path, genid = sys.argv[1:]
+
+if not os.path.isfile(metadata_path):
+    raise SystemExit(f"Generation {genid} metadata is missing: {metadata_path}")
+
+with open(metadata_path, encoding="utf-8") as handle:
+    metadata = json.load(handle)
+
+if metadata.get("run_eval") is not True:
+    raise SystemExit(f"Generation {genid} has run_eval != true")
+if metadata.get("valid_parent") is not True:
+    raise SystemExit(f"Generation {genid} has valid_parent != true")
+if not os.path.isfile(patch_path) or os.path.getsize(patch_path) == 0:
+    raise SystemExit(
+        f"Generation {genid} lacks a non-empty canonical model_patch.diff: "
+        f"{patch_path}"
+    )
+
+print(
+    f"GENERATION_{genid}_VERIFIED: "
+    "run_eval=true valid_parent=true canonical_patch=present"
+)
+PY
+}
+
+read_cumulative_tokens() {
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH="$worktree_path" \
+    "$venv_path/bin/python" -c \
+        'import sys; from measurement.token_accounting import cumulative_total, scan_generation_token_totals; print(cumulative_total(scan_generation_token_totals(sys.argv[1])))' \
+        "$run_output"
+}
+
+verify_search_completion() {
+    local max_genid="$1"
+    local archive_path="$run_output/archive.jsonl"
+    local search_tokens="0"
+
+    if [[ -n "$stop_token_budget" ]]; then
+        search_tokens="$(read_cumulative_tokens)"
+    fi
+
+    "$venv_path/bin/python" - "$run_output" "$archive_path" "$max_genid" "$stop_token_budget" "$search_tokens" "$phase" <<'PY'
+import json
+import os
+import sys
+
+run_output, archive_path, max_genid, stop_budget, search_tokens, phase = sys.argv[1:]
+max_genid = int(max_genid)
+budget_reached = bool(stop_budget) and int(search_tokens) >= int(stop_budget)
+
+if not os.path.isfile(archive_path):
+    raise SystemExit(f"Archive is missing: {archive_path}")
+
+with open(archive_path, encoding="utf-8") as handle:
+    records = [json.loads(line) for line in handle if line.strip()]
+
+actual = records[-1].get("current_genid") if records else None
+completed_genid = 0 if actual == "initial" else actual
+if (
+    not isinstance(completed_genid, int)
+    or completed_genid > max_genid
+    or (not budget_reached and completed_genid != max_genid)
+):
+    raise SystemExit(
+        f"Search stopped at generation {actual}; expected generation {max_genid}."
+    )
+
+expected_archive = ["initial", *range(1, completed_genid + 1)]
+if records[-1].get("archive") != expected_archive:
+    raise SystemExit(
+        "Final archive does not contain every expected generation: "
+        f"{records[-1].get('archive')!r}"
+    )
+
+valid_candidates = []
+for genid in range(1, completed_genid + 1):
+    gen_dir = os.path.join(run_output, f"gen_{genid}")
+    metadata_path = os.path.join(gen_dir, "metadata.json")
+    patch_path = os.path.join(gen_dir, "agent_output", "model_patch.diff")
+
+    if not os.path.isfile(metadata_path):
+        raise SystemExit(
+            f"Generation {genid} metadata is missing: {metadata_path}"
+        )
+
+    with open(metadata_path, encoding="utf-8") as handle:
+        metadata = json.load(handle)
+
+    if (
+        metadata.get("parent_agent_success") is True
+        and metadata.get("run_eval") is True
+        and metadata.get("valid_parent") is True
+        and os.path.isfile(patch_path)
+        and os.path.getsize(patch_path) > 0
+    ):
+        valid_candidates.append(genid)
+
+if not valid_candidates and not stop_budget and phase not in ("long-run-start", "long-run-resume"):
+    raise SystemExit(
+        "Search completed, but no currently valid evaluated generation has "
+        "a non-empty canonical model_patch.diff."
+    )
+
+print(
+    f"SEARCH_THROUGH_GENERATION_{completed_genid}_VERIFIED: "
+    f"valid_evaluated_candidates={valid_candidates}"
+)
+PY
+}
+
+verify_reached_checkpoints() {
+    local max_genid="$1"
+
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$worktree_path" \
+    "$venv_path/bin/python" - "$run_output" "$private_output" "$max_genid" \
+        "$phase" "$stop_token_budget" "${checkpoint_budgets[*]}" \
+        "${generation_checkpoints[*]}" "${search_hour_checkpoints[*]}" <<'PY'
+import json
+import os
+import sys
+
+from measurement.held_out import checkpoint_tests_complete
+from measurement.token_accounting import (
+    cumulative_total, read_evaluation_records, scan_generation_token_totals,
+)
+
+run_output, private_dir, max_genid, phase, stop_budget, tokens, generations, hours = sys.argv[1:]
+with open(os.path.join(run_output, "archive.jsonl"), encoding="utf-8") as handle:
+    archive = [json.loads(line) for line in handle if line.strip()][-1]
+last_generation = archive["current_genid"]
+completed = 0 if last_generation == "initial" else int(last_generation)
+cumulative = cumulative_total(scan_generation_token_totals(run_output))
+dimensions = [("T", list(map(int, tokens.split())), cumulative, "evaluation_cost_tokens", 1)]
+if phase in ("long-run-start", "long-run-resume"):
+    with open(os.path.join(private_dir, "search_time.json"), encoding="utf-8") as handle:
+        search_seconds = json.load(handle)["search_seconds"]
+    dimensions += [
+        ("G", list(map(int, generations.split())), completed, "evaluation_generation", 1),
+        ("H", list(map(float, hours.split())), search_seconds / 3600,
+         "evaluation_search_seconds", 3600),
+    ]
+records = read_evaluation_records(private_dir)
+reached_count = 0
+for prefix, budgets, reached, field, scale in dimensions:
+    for budget in budgets:
+        if budget > reached:
+            continue
+        if not any(record.get(field, float("inf")) <= budget * scale for record in records):
+            print(f"CHECKPOINT_{prefix}{budget:g}_UNAVAILABLE: no evaluation completed within threshold")
+            continue
+        label = f"{budget:g}" if prefix == "H" else str(budget)
+        checkpoint_path = os.path.join(private_dir, "checkpoints", f"checkpoint_{prefix}{label}.json")
+        if not os.path.isfile(checkpoint_path):
+            raise SystemExit(f"Reached checkpoint lacks a frozen record: {checkpoint_path}")
+        with open(checkpoint_path, encoding="utf-8") as handle:
+            checkpoint = json.load(handle)
+        if not checkpoint_tests_complete(private_dir, checkpoint, ["paper_review"]):
+            raise SystemExit(f"Reached checkpoint has incomplete isolated held-out tests: {checkpoint_path}")
+        reached_count += 1
+if reached_count == 0 and not stop_budget and phase not in ("long-run-start", "long-run-resume"):
+    raise SystemExit(f"No checkpoint was reached by generation {max_genid}.")
+print(f"REACHED_CHECKPOINTS_VERIFIED={reached_count}")
+PY
+}
+
+summarize_one() {
+    local requested_profile="$1"
+    configure_profile "$requested_profile"
+    printf '\nPROFILE=%s\nRUN_OUTPUT=%s\n' "$requested_profile" "$run_output"
+
+    if [[ ! -d "$run_output" ]]; then
+        echo "STATUS=missing calibration output"
+        return
+    fi
+
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH="$worktree_path" \
+    "$venv_path/bin/python" - "$run_output" <<'PY'
+import json
+import os
+import sys
+
+from measurement.token_accounting import (
+    cumulative_total,
+    read_selection_records,
+    scan_generation_token_totals,
+)
+
+output_dir = os.path.abspath(sys.argv[1])
+private_dir = output_dir + "_private"
+totals = scan_generation_token_totals(output_dir)
+records = read_selection_records(private_dir)
+print(
+    "TOKEN_TOTALS="
+    + json.dumps(
+        {str(key): value for key, value in totals.items()},
+        sort_keys=True,
+    )
+)
+print(f"CUMULATIVE_TOKENS={cumulative_total(totals)}")
+print("SELECTION_RECORDS=" + json.dumps(records, sort_keys=True))
+if records:
+    print(f"FIRST_VALID_SELECTION_COST={records[0]['selection_cost_tokens']}")
+else:
+    print("FIRST_VALID_SELECTION_COST=UNAVAILABLE")
+PY
+}
+
+if [[ "${1:-}" == "summary" ]]; then
+    if [[ "$#" -ne 1 ]]; then
+        usage >&2
+        exit 2
+    fi
+    summarize_one original-full
+    summarize_one original-compressed10
+    summarize_one structured_history
+    summarize_one gvf_lambda1_sibling0
+    summarize_one gvf_lambda1_sibling1
+    summarize_one gvf_lambda5_sibling0
+    summarize_one gvf_lambda5_sibling1
+    summarize_one gvf_lambda10_sibling0
+    summarize_one gvf_lambda10_sibling1
+    summarize_one gvf_reason_sibling0
+    summarize_one gvf_reason_sibling1
+    exit 0
+fi
+
+if [[ "$#" -lt 2 || "$#" -gt 5 ]]; then
+    usage >&2
+    exit 2
+fi
+
+readonly profile="$1"
+readonly phase="$2"
+readonly stop_token_budget="${4:-}"
+readonly generation_limit="${5:-}"
+configure_profile "$profile"
+
+case "$phase" in
+    calibrate)
+        if [[ "$#" -ne 2 ]]; then
+            usage >&2
+            exit 2
+        fi
+        ;;
+    continue)
+        if [[ "$#" -ne 2 ]]; then
+            usage >&2
+            exit 2
+        fi
+        ;;
+    checkpoint-smoke)
+        if [[ "$#" -ne 2 ]]; then
+            usage >&2
+            exit 2
+        fi
+        ;;
+    long-run-start|long-run-resume)
+        if [[ "$#" -lt 3 || ! "$3" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: $phase requires a positive segment endpoint and optional token/generation limits." >&2
+            usage >&2
+            exit 2
+        fi
+        max_generation_target="$3"
+        if [[ "$#" -ge 4 ]]; then
+            if [[ ! "$stop_token_budget" =~ ^[1-9][0-9]*$ || " ${token_budgets[*]} " != *" $stop_token_budget "* ]]; then
+                echo "ERROR: stop token budget must be one of: ${token_budgets[*]}" >&2
+                exit 2
+            fi
+        fi
+        if [[ "$#" -eq 5 ]]; then
+            if [[ ! "$generation_limit" =~ ^[1-9][0-9]*$ ]]; then
+                echo "ERROR: generation limit must be a positive integer." >&2
+                exit 2
+            fi
+            if (( max_generation_target > generation_limit )); then
+                max_generation_target="$generation_limit"
+            fi
+        fi
+        readonly max_generation_target
+        ;;
+    *)
+        echo "ERROR: unknown phase: $phase" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
+
+checkpoint_budgets=()
+stop_args=()
+for budget in "${token_budgets[@]}"
+do
+    if [[ -z "$stop_token_budget" ]] || (( budget <= stop_token_budget )); then
+        checkpoint_budgets+=("$budget")
+    fi
+done
+if [[ -n "$stop_token_budget" ]]; then
+    stop_args=(--stop_token_budget "$stop_token_budget")
+fi
+
+if [[ -z "${SLURM_JOB_ID:-}" || -z "${SLURM_TMPDIR:-}" ]]; then
+    echo "ERROR: experiment phases must run inside a Slurm allocation." >&2
+    exit 1
+fi
+
+if [[ ! -d "$worktree_path" ]]; then
+    echo "ERROR: missing worktree: $worktree_path" >&2
+    exit 1
+fi
+
+if [[ "$(git -C "$worktree_path" rev-parse HEAD)" != "$expected_source_sha" ]]; then
+    echo "ERROR: unexpected source SHA in $worktree_path" >&2
+    git -C "$worktree_path" rev-parse HEAD >&2
+    exit 1
+fi
+
+if [[ -n "$(git -C "$worktree_path" status --porcelain)" ]]; then
+    echo "ERROR: source worktree is not clean: $worktree_path" >&2
+    git -C "$worktree_path" status --short --branch >&2
+    exit 1
+fi
+
+if [[ ! -x "$venv_path/bin/python" || ! -x "$venv_path/bin/vllm" ]]; then
+    echo "ERROR: incomplete Python/vLLM environment: $venv_path" >&2
+    exit 1
+fi
+
+if [[ ! -d "$model_path" ]]; then
+    echo "ERROR: Qwen3.8 model directory is missing: $model_path" >&2
+    exit 1
+fi
+
+if [[ ! -r "$apptainer_image" ]]; then
+    echo "ERROR: Apptainer image is missing: $apptainer_image" >&2
+    exit 1
+fi
+
+if [[ "$phase" == "calibrate" ]]; then
+    for path in "$run_output" "$private_output" "$train_baseline" "$val_baseline"
+    do
+        if [[ -e "$path" ]]; then
+            echo "ERROR: calibration target already exists: $path" >&2
+            echo "Inspect it explicitly; this launcher never deletes or silently reuses partial output." >&2
+            exit 1
+        fi
+    done
+elif [[ "$phase" == "continue" ]]; then
+    if [[ ! -f "$run_output/archive.jsonl" ]]; then
+        echo "ERROR: generation-1 calibration is incomplete: $run_output" >&2
+        exit 1
+    fi
+    verify_generation_success 1
+
+    earliest_evaluation_cost="$(
+        PYTHONDONTWRITEBYTECODE=1 \
+        PYTHONPATH="$worktree_path" \
+        "$venv_path/bin/python" -c \
+            'import sys; from measurement.token_accounting import read_evaluation_records; records=read_evaluation_records(sys.argv[1]); print(records[0]["evaluation_cost_tokens"] if records else "")' \
+            "$private_output"
+    )"
+    if [[ -z "$earliest_evaluation_cost" ]]; then
+        echo "ERROR: calibration produced no completed-evaluation record." >&2
+        exit 1
+    fi
+    if (( checkpoint_smoke_budget < earliest_evaluation_cost )); then
+        echo "ERROR: first token budget $checkpoint_smoke_budget precedes the first usable evaluation at $earliest_evaluation_cost." >&2
+        exit 1
+    fi
+elif [[ "$phase" == "checkpoint-smoke" ]]; then
+    for path in "$run_output" "$private_output"
+    do
+        if [[ -e "$path" ]]; then
+            echo "ERROR: checkpoint-smoke target already exists: $path" >&2
+            echo "This launcher never deletes or resumes an integrated smoke." >&2
+            exit 1
+        fi
+    done
+    for baseline_dir in "$train_baseline" "$val_baseline"
+    do
+        for required_file in \
+            predictions.csv \
+            report.json \
+            eval_manifest.json \
+            measurement/token_log.jsonl
+        do
+            if [[ ! -f "$baseline_dir/$required_file" ]]; then
+                echo "ERROR: checkpoint-smoke requires a complete baseline: $baseline_dir/$required_file" >&2
+                exit 1
+            fi
+        done
+    done
+elif [[ "$phase" == "long-run-start" ]]; then
+    for path in \
+        "$run_output" \
+        "$private_output" \
+        "$train_baseline" \
+        "$val_baseline"
+    do
+        if [[ -e "$path" ]]; then
+            echo "ERROR: formal long-run target already exists: $path" >&2
+            echo "This launcher never deletes or silently reuses formal output." >&2
+            exit 1
+        fi
+    done
+else
+    if [[ ! -f "$run_output/archive.jsonl" ]]; then
+        echo "ERROR: formal long-run output cannot be resumed: $run_output" >&2
+        exit 1
+    fi
+    completed_generation="$(
+        "$venv_path/bin/python" -c \
+            'import json, sys; records=[json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]; value=records[-1]["current_genid"] if records else ""; print(0 if value == "initial" else value)' \
+            "$run_output/archive.jsonl"
+    )"
+    if [[ ! "$completed_generation" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: formal long-run archive has no completed generation." >&2
+        exit 1
+    fi
+    if (( completed_generation > max_generation_target )); then
+        echo "ERROR: formal long run passed requested target $max_generation_target (generation $completed_generation)." >&2
+        exit 1
+    fi
+    search_finished=false
+    if [[ -n "$stop_token_budget" ]]; then
+        cumulative_tokens="$(read_cumulative_tokens)"
+        if (( cumulative_tokens >= stop_token_budget )); then
+            search_finished=true
+        fi
+    fi
+    if (( completed_generation == max_generation_target )); then
+        search_finished=true
+    fi
+    if [[ -n "$generation_limit" ]] && (( completed_generation >= generation_limit )); then
+        search_finished=true
+    fi
+    if [[ "$search_finished" == true ]]; then
+        verify_search_completion "$max_generation_target"
+        if verify_reached_checkpoints "$max_generation_target"; then
+            echo "FORMAL_LONG_RUN_SEARCH_AND_TESTS_ALREADY_COMPLETED"
+            exit 0
+        fi
+        echo "Search target reached; resuming incomplete held-out tests without further evolution."
+    fi
+fi
+
+module load StdEnv/2023 apptainer/1.4.5
+source "$venv_path/bin/activate"
+
+cd "$worktree_path"
+
+gpu_count="$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)"
+if [[ "$gpu_count" -ne 4 ]]; then
+    echo "ERROR: expected exactly four visible GPUs, found $gpu_count." >&2
+    exit 1
+fi
+
+if ss -ltn "sport = :$vllm_port" | tail -n +2 | grep -q .; then
+    echo "ERROR: vLLM port $vllm_port is already in use on $(hostname)." >&2
+    exit 1
+fi
+
+export LD_LIBRARY_PATH="$VIRTUAL_ENV/lib/python3.11/site-packages/nvidia/cu13/lib:${LD_LIBRARY_PATH:-}"
+export HF_HUB_OFFLINE="1"
+export TRANSFORMERS_OFFLINE="1"
+export VLLM_USE_FLASHINFER_SAMPLER="0"
+
+export HYPERAGENTS_MODEL="openai/qwen3.8-27b"
+export HYPERAGENTS_TASK_MODEL="openai/qwen3.8-27b"
+export HYPERAGENTS_META_MODEL="openai/qwen3.8-27b"
+export HYPERAGENTS_TEST_MODEL_PATH="$model_path"
+export HYPERAGENTS_API_BASE="http://127.0.0.1:${vllm_port}/v1"
+export HYPERAGENTS_API_KEY="EMPTY"
+export HYPERAGENTS_MAX_TOKENS="$max_output_tokens"
+export HYPERAGENTS_THINKING_MODE="on"
+export HYPERAGENTS_REQUEST_TIMEOUT="$request_timeout_seconds"
+export LITELLM_LOCAL_MODEL_COST_MAP="True"
+export PYTHONDONTWRITEBYTECODE="1"
+
+export HYPERAGENTS_APPTAINER_IMAGE="$apptainer_image"
+export HYPERAGENTS_APPTAINER_RUNTIME="$SLURM_TMPDIR/hyperagents-apptainer-runtime/${profile}-${phase}"
+
+# Trillium mounts home/project read-only on compute nodes.
+export XDG_CACHE_HOME="$SLURM_TMPDIR/hyperagents-cache"
+export HF_HOME="$XDG_CACHE_HOME/huggingface"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
+export VLLM_CACHE_ROOT="$XDG_CACHE_HOME/vllm"
+export TORCHINDUCTOR_CACHE_DIR="$XDG_CACHE_HOME/torchinductor"
+export CUDA_CACHE_PATH="$XDG_CACHE_HOME/cuda"
+export APPTAINER_CACHEDIR="$XDG_CACHE_HOME/apptainer"
+
+mkdir --parents \
+    "$worktree_path/outputs/manual_logs" \
+    "$HYPERAGENTS_APPTAINER_RUNTIME" \
+    "$XDG_CACHE_HOME"
+
+readonly vllm_log="$worktree_path/outputs/manual_logs/qwen38-${profile}-${phase}-${SLURM_JOB_ID}.log"
+
+vllm_command=(
+    "$VIRTUAL_ENV/bin/vllm"
+    serve
+    "$model_path"
+    --host "127.0.0.1"
+    --port "$vllm_port"
+    --served-model-name "qwen3.8-27b"
+    --tensor-parallel-size "4"
+    --dtype "bfloat16"
+    --max-model-len "$max_model_len"
+    --gpu-memory-utilization "0.9"
+    --max-num-seqs "$max_num_seqs"
+    --seed "0"
+    --enforce-eager
+    --language-model-only
+    --reasoning-parser "qwen3"
+    --enable-auto-tool-choice
+    --tool-call-parser "qwen3_coder"
+    --gdn-prefill-backend "triton"
+)
+
+vllm_pid=""
+
+cleanup_vllm() {
+    if [[ -n "${vllm_pid:-}" ]] && kill -0 "$vllm_pid" 2>/dev/null; then
+        echo "Stopping vLLM PID $vllm_pid"
+        kill "$vllm_pid" 2>/dev/null || true
+        wait "$vllm_pid" 2>/dev/null || true
+    fi
+}
+
+trap cleanup_vllm EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+"${vllm_command[@]}" >"$vllm_log" 2>&1 &
+vllm_pid="$!"
+
+echo "PROFILE=$profile"
+echo "PHASE=$phase"
+echo "WORKTREE=$worktree_path"
+echo "SOURCE_SHA=$expected_source_sha"
+echo "RUN_OUTPUT=$run_output"
+echo "VLLM_PORT=$vllm_port"
+echo "VLLM_MAX_NUM_SEQS=$max_num_seqs"
+echo "VLLM_TENSOR_PARALLEL_SIZE=4"
+echo "EVAL_WORKERS=$eval_workers"
+echo "REQUEST_TIMEOUT_SECONDS=$request_timeout_seconds"
+echo "VLLM_PID=$vllm_pid"
+echo "VLLM_LOG=$vllm_log"
+
+vllm_ready="0"
+for attempt in $(seq 1 180)
+do
+    if ! kill -0 "$vllm_pid" 2>/dev/null; then
+        echo "ERROR: vLLM exited before becoming ready." >&2
+        tail -n 120 "$vllm_log" >&2
+        exit 1
+    fi
+
+    models_response="$(
+        curl --silent --show-error --fail \
+            "http://127.0.0.1:${vllm_port}/v1/models" \
+            2>/dev/null || true
+    )"
+
+    if [[ "$models_response" == *"qwen3.8-27b"* && "$models_response" == *"$max_model_len"* ]]; then
+        vllm_ready="1"
+        echo "$models_response"
+        echo "VLLM_API_READY"
+        break
+    fi
+
+    if (( attempt == 1 || attempt % 6 == 0 )); then
+        printf 'Waiting for vLLM: attempt %s/180\n' "$attempt"
+    fi
+    sleep 10
+done
+
+if [[ "$vllm_ready" != "1" ]]; then
+    echo "ERROR: vLLM did not become ready within 30 minutes." >&2
+    tail -n 120 "$vllm_log" >&2
+    exit 1
+fi
+
+if ! grep -q "Application startup complete" "$vllm_log"; then
+    echo "ERROR: vLLM API answered but the startup-complete marker is absent." >&2
+    tail -n 120 "$vllm_log" >&2
+    exit 1
+fi
+
+if grep -q "FlashInfer GDN prefill is JIT-compiled" "$vllm_log"; then
+    echo "ERROR: vLLM used the unwanted FlashInfer GDN JIT path." >&2
+    exit 1
+fi
+
+if ! grep -q "Using Triton/FLA GDN prefill kernel" "$vllm_log"; then
+    echo "ERROR: vLLM did not confirm the Triton/FLA GDN prefill backend." >&2
+    exit 1
+fi
+
+generate_args=(
+    --domains paper_review
+    --train_eval_samples "$train_eval_samples"
+    --val_eval_samples "$val_eval_samples"
+    --eval_workers "$eval_workers"
+    --parent_selection "$parent_selection"
+    --sampling_mode "$sampling_mode"
+    --eval_seed_base "$eval_seed_base"
+    --selection_lambda "$selection_lambda"
+    --optimize_option only_agent
+    --execution_backend apptainer
+    --apptainer_image "$HYPERAGENTS_APPTAINER_IMAGE"
+    --apptainer_runtime_dir "$HYPERAGENTS_APPTAINER_RUNTIME"
+)
+
+if [[ "$skip_staged_eval" == "1" ]]; then
+    generate_args+=(--skip_staged_eval)
+fi
+
+if [[ "$use_gvf" == "1" ]]; then
+    generate_args+=(
+        --lineage_depth 3
+        --sibling_count "$sibling_count"
+        --max_questions 4
+        --qa_context_chars 80000
+    )
+fi
+
+checkpoint_args=()
+baseline_timer=()
+if [[ "$phase" == "long-run-start" || "$phase" == "long-run-resume" ]]; then
+    checkpoint_args=(
+        --generation_checkpoints "${generation_checkpoints[@]}"
+        --search_hour_checkpoints "${search_hour_checkpoints[@]}"
+    )
+    baseline_timer=(
+        "$VIRTUAL_ENV/bin/python" -m measurement.search_time
+        --private_dir "$private_output" --
+    )
+fi
+
+run_initial_baseline_split() {
+    local split="$1"
+    local num_samples="$train_eval_samples"
+    if [[ "$split" == "val" ]]; then
+        num_samples="$val_eval_samples"
+    fi
+    local subset="_filtered_100_${split}"
+    local baseline_name="initial_paper_review${subset}_0"
+    local seed
+
+    seed="$(
+        "$VIRTUAL_ENV/bin/python" -c \
+            'import sys; from domains.eval_sampling import compute_eval_seed; print(compute_eval_seed(sys.argv[1], "paper_review", 0, sys.argv[2]))' \
+            "$eval_seed_base" "$split"
+    )"
+
+    echo "Starting initial $split baseline with seed $seed at $(date --iso-8601=seconds)"
+    "${baseline_timer[@]}" "$VIRTUAL_ENV/bin/python" -m domains.harness \
+        --output_dir "$worktree_path/outputs" \
+        --run_id "$baseline_name" \
+        --domain paper_review \
+        --num_samples "$num_samples" \
+        --num_workers "$eval_workers" \
+        --subset "$subset" \
+        --sampling_mode "$sampling_mode" \
+        --eval_seed "$seed" \
+        --split "$split" \
+        --generation 0
+
+    "${baseline_timer[@]}" "$VIRTUAL_ENV/bin/python" -m domains.report \
+        --domain paper_review \
+        --dname "$worktree_path/outputs/$baseline_name"
+}
+
+verify_generated_repository() {
+    local generated_repo="$run_output/gen_initial/hyperagents"
+
+    if [[ ! -d "$generated_repo/.git" ]]; then
+        echo "ERROR: generated repository lacks independent Git metadata." >&2
+        exit 1
+    fi
+    if [[ -n "$(git -C "$generated_repo" remote)" ]]; then
+        echo "ERROR: generated repository has a remote." >&2
+        exit 1
+    fi
+    if [[ -n "$(git -C "$generated_repo" status --porcelain)" ]]; then
+        echo "ERROR: generated repository is not clean." >&2
+        git -C "$generated_repo" status --short --branch >&2
+        exit 1
+    fi
+    if [[ -e "$generated_repo/project_status" || -e "$generated_repo/host_experiment_scripts" ]]; then
+        echo "ERROR: host-only files leaked into the generated repository." >&2
+        exit 1
+    fi
+    for forbidden_dataset in \
+        dataset.csv \
+        dataset_filtered_100_val.csv \
+        dataset_filtered_100_test.csv
+    do
+        if [[ -e "$generated_repo/domains/paper_review/$forbidden_dataset" ]]; then
+            echo "ERROR: validation/test data leaked into the generated repository: $forbidden_dataset" >&2
+            exit 1
+        fi
+    done
+    if [[ ! -e "$generated_repo/domains/paper_review/dataset_filtered_100_train.csv" ]]; then
+        echo "ERROR: training data is missing from the generated repository." >&2
+        exit 1
+    fi
+
+    if [[ "$use_gvf" == "1" ]]; then
+        if [[ ! -d "$generated_repo/gvf" || ! -f "$generated_repo/question_module.py" ]]; then
+            echo "ERROR: GVF profile lacks its required agent-visible GVF files." >&2
+            exit 1
+        fi
+    else
+        if [[ -e "$generated_repo/gvf" || -e "$generated_repo/question_module.py" ]]; then
+            echo "ERROR: COMMON_BASE profile can see GVF-specific files." >&2
+            exit 1
+        fi
+    fi
+
+    "$VIRTUAL_ENV/bin/python" - "$run_output" "$val_eval_samples" <<'PY'
+import json
+import os
+import sys
+
+import pandas as pd
+
+run_output = os.path.abspath(sys.argv[1])
+expected_count = int(sys.argv[2])
+val_dir = os.path.join(run_output, "gen_initial", "paper_review_eval_val")
+predictions = pd.read_csv(os.path.join(val_dir, "predictions.csv"), dtype=str)
+if set(predictions.columns) != {"question_id", "prediction"}:
+    raise SystemExit(
+        "Initial validation artifact is not label-free: "
+        + repr(list(predictions.columns))
+    )
+manifest = json.load(open(os.path.join(val_dir, "eval_manifest.json"), encoding="utf-8"))
+if manifest.get("num_samples") != expected_count:
+    raise SystemExit(
+        f"Initial validation manifest has {manifest.get('num_samples')} samples; "
+        f"expected {expected_count}."
+    )
+print("INITIAL_VALIDATION_IS_LABEL_FREE")
+PY
+}
+
+if [[ "$phase" == "calibrate" ]]; then
+    run_initial_baseline_split train
+    run_initial_baseline_split val
+
+    echo "Starting generation-1 calibration at $(date --iso-8601=seconds)"
+    "$VIRTUAL_ENV/bin/python" generate_loop.py \
+        --run_id "$run_id" \
+        --max_generation 1 \
+        --output_dir_parent "$worktree_path/outputs" \
+        "${generate_args[@]}"
+
+    verify_generation_success 1
+    verify_generated_repository
+    summarize_one "$profile"
+    echo "CALIBRATION_COMPLETED_AND_VERIFIED"
+elif [[ "$phase" == "continue" ]]; then
+    echo "Resuming generations 2-5 with token budgets ${token_budgets[*]} at $(date --iso-8601=seconds)"
+    "$VIRTUAL_ENV/bin/python" generate_loop.py \
+        --max_generation 5 \
+        --resume_from "$run_output" \
+        --token_budgets "${token_budgets[@]}" \
+        --test_eval_samples 10 \
+        "${generate_args[@]}"
+
+    verify_search_completion 5
+    verify_reached_checkpoints 5
+
+    verify_generated_repository
+    summarize_one "$profile"
+    echo "SMOKE_GENERATIONS_1_TO_5_AND_CHECKPOINT_COMPLETED"
+elif [[ "$phase" == "checkpoint-smoke" ]]; then
+    echo "Starting fresh generations 1-5 with token budgets ${token_budgets[*]} at $(date --iso-8601=seconds)"
+    "$VIRTUAL_ENV/bin/python" generate_loop.py \
+        --run_id "$run_id" \
+        --max_generation 5 \
+        --output_dir_parent "$worktree_path/outputs" \
+        --token_budgets "${token_budgets[@]}" \
+        --test_eval_samples 10 \
+        "${generate_args[@]}"
+
+    verify_search_completion 5
+    verify_reached_checkpoints 5
+
+    verify_generated_repository
+    summarize_one "$profile"
+    echo "FRESH_GENERATIONS_1_TO_5_AND_CHECKPOINT_COMPLETED"
+elif [[ "$phase" == "long-run-start" ]]; then
+    run_initial_baseline_split train
+    run_initial_baseline_split val
+
+    echo "Starting fresh formal generations 1-$max_generation_target with token budgets ${checkpoint_budgets[*]} at $(date --iso-8601=seconds)"
+    "$VIRTUAL_ENV/bin/python" generate_loop.py \
+        --run_id "$run_id" \
+        --max_generation "$max_generation_target" \
+        --output_dir_parent "$worktree_path/outputs" \
+        --token_budgets "${checkpoint_budgets[@]}" \
+        "${stop_args[@]}" \
+        "${checkpoint_args[@]}" \
+        --test_eval_samples 50 \
+        --test_eval_repeats 3 \
+        "${generate_args[@]}"
+
+    verify_search_completion "$max_generation_target"
+    verify_reached_checkpoints "$max_generation_target"
+    verify_generated_repository
+    summarize_one "$profile"
+    if [[ -z "$stop_token_budget" ]]; then
+        echo "FORMAL_LONG_RUN_THROUGH_GENERATION_${max_generation_target}_COMPLETED"
+    fi
+else
+    echo "Resuming formal search/checkpoints through generation $max_generation_target (completed: $completed_generation) with token budgets ${checkpoint_budgets[*]} at $(date --iso-8601=seconds)"
+    "$VIRTUAL_ENV/bin/python" generate_loop.py \
+        --max_generation "$max_generation_target" \
+        --resume_from "$run_output" \
+        --token_budgets "${checkpoint_budgets[@]}" \
+        "${stop_args[@]}" \
+        "${checkpoint_args[@]}" \
+        --test_eval_samples 50 \
+        --test_eval_repeats 3 \
+        "${generate_args[@]}"
+
+    verify_search_completion "$max_generation_target"
+    verify_reached_checkpoints "$max_generation_target"
+    verify_generated_repository
+    summarize_one "$profile"
+    if [[ -z "$stop_token_budget" ]]; then
+        echo "FORMAL_LONG_RUN_THROUGH_GENERATION_${max_generation_target}_COMPLETED"
+    fi
+fi
+
+if [[ -n "$(git -C "$worktree_path" status --porcelain)" ]]; then
+    echo "ERROR: source worktree changed during the experiment." >&2
+    git -C "$worktree_path" status --short --branch >&2
+    exit 1
+fi
+
+if [[ -n "$stop_token_budget" ]]; then
+    cumulative_tokens="$(read_cumulative_tokens)"
+    if (( cumulative_tokens >= stop_token_budget )); then
+        echo "FORMAL_LONG_RUN_TOKEN_BUDGET_${stop_token_budget}_COMPLETED"
+    elif [[ -n "$generation_limit" ]] && (( max_generation_target >= generation_limit )); then
+        echo "FORMAL_LONG_RUN_GENERATION_LIMIT_${generation_limit}_COMPLETED"
+    else
+        echo "TOKEN_BUDGET_SEGMENT_COMPLETED: continue with the next login-submitted segment."
+    fi
+fi
+
+echo "Finished at $(date --iso-8601=seconds)"
