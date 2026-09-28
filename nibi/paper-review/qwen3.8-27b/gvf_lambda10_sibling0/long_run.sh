@@ -17,26 +17,44 @@ readonly script_path="$script_dir/long_run.sh"
 # Global limits are distinct from each job's generation endpoint.
 generation_limit=""
 stop_token_budget=""
+early_stop="true"
+early_stop_min_generations="10"
+early_stop_patience="5"
 if [[ "${1:-}" == --* ]]; then
     while [[ "$#" -gt 0 ]]; do
-        if [[ "$#" -lt 2 || ! "$2" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Usage: bash $script_path [--max_generation <generations>] [--stop_token_budget <tokens>]" >&2
+        if [[ "$#" -lt 2 ]]; then
+            echo "Usage: bash $script_path [--max_generation <generations>] [--stop_token_budget <tokens>] [--early_stop true|false] [--early_stop_min_generations <generations>] [--early_stop_patience <attempts>]" >&2
+            exit 2
+        fi
+        if [[ "$1" == --early_stop || "$1" == --early-stop ]]; then
+            [[ "$2" == true || "$2" == false ]] || { echo "ERROR: early_stop must be true or false" >&2; exit 2; }
+        elif [[ ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: $1 requires a positive integer" >&2
             exit 2
         fi
         case "$1" in
             --max_generation|--max-generation) generation_limit="$2" ;;
             --stop_token_budget|--stop-token-budget) stop_token_budget="$2" ;;
+            --early_stop|--early-stop) early_stop="$2" ;;
+            --early_stop_min_generations|--early-stop-min-generations) early_stop_min_generations="$2" ;;
+            --early_stop_patience|--early-stop-patience) early_stop_patience="$2" ;;
             *) echo "ERROR: unknown option: $1" >&2; exit 2 ;;
         esac
         shift 2
     done
 fi
 
+search_control_args=(
+    --early_stop "$early_stop"
+    --early_stop_min_generations "$early_stop_min_generations"
+    --early_stop_patience "$early_stop_patience"
+)
+
 if [[ -n "$stop_token_budget" ]]; then
     first_generation_target=10
     generation_limit_args=()
     if [[ -n "$generation_limit" ]]; then
-        generation_limit_args=("$generation_limit")
+        generation_limit_args=(--generation_limit "$generation_limit")
         if (( generation_limit < first_generation_target )); then
             first_generation_target="$generation_limit"
         fi
@@ -51,7 +69,8 @@ if [[ -n "$stop_token_budget" ]]; then
             long-run-start \
             "$first_generation_target" \
             "$stop_token_budget" \
-            "${generation_limit_args[@]}"
+            "${generation_limit_args[@]}" \
+            "${search_control_args[@]}"
     )"
     printf 'A3 lambda=10 sibling=0 token budget %s: %s\n' "$stop_token_budget" "${job_id%%;*}"
     exit 0
@@ -87,7 +106,9 @@ if [[ "$#" -eq 0 ]]; then
                 --job-name="ha-pr-a3-l10-s0-g${generation_range}-q38" \
                 "$script_path" \
                 "$phase" \
-                "$max_generation"
+                "$max_generation" \
+                --generation_limit "$generation_limit" \
+                "${search_control_args[@]}"
         )"
         job_id="${job_id%%;*}"
         job_chain="${job_chain:+$job_chain -> }$job_id"

@@ -62,6 +62,7 @@ usage() {
         "  $0 <profile> long-run-start <segment-end> [stop-token-budget [generation-limit]]" \
         "  $0 <profile> long-run-resume <segment-end> [stop-token-budget [generation-limit]]" \
         "  $0 summary" \
+        "Formal options: --generation_limit N --early_stop true|false --early_stop_min_generations N --early_stop_patience N" \
         "" \
         "Profiles:" \
         "  original-full" \
@@ -295,21 +296,34 @@ read_cumulative_tokens() {
         "$run_output"
 }
 
+read_search_status() {
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$worktree_path" \
+    "$venv_path/bin/python" -m measurement.early_stopping "$run_output" \
+        "${search_control_args[@]}" "${stop_args[@]}"
+}
+
+write_formal_results() {
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$worktree_path" \
+    "$venv_path/bin/python" -m measurement.results_export "$run_output"
+}
+
 verify_search_completion() {
     local max_genid="$1"
     local archive_path="$run_output/archive.jsonl"
     local search_tokens="0"
+    local stop_status
+    stop_status="$(read_search_status)"
 
     if [[ -n "$stop_token_budget" ]]; then
         search_tokens="$(read_cumulative_tokens)"
     fi
 
-    "$venv_path/bin/python" - "$run_output" "$archive_path" "$max_genid" "$stop_token_budget" "$search_tokens" "$phase" <<'PY'
+    "$venv_path/bin/python" - "$run_output" "$archive_path" "$max_genid" "$stop_token_budget" "$search_tokens" "$phase" "$stop_status" <<'PY'
 import json
 import os
 import sys
 
-run_output, archive_path, max_genid, stop_budget, search_tokens, phase = sys.argv[1:]
+run_output, archive_path, max_genid, stop_budget, search_tokens, phase, stop_status = sys.argv[1:]
 max_genid = int(max_genid)
 budget_reached = bool(stop_budget) and int(search_tokens) >= int(stop_budget)
 
@@ -324,7 +338,7 @@ completed_genid = 0 if actual == "initial" else actual
 if (
     not isinstance(completed_genid, int)
     or completed_genid > max_genid
-    or (not budget_reached and completed_genid != max_genid)
+    or (not budget_reached and stop_status != "stopped" and completed_genid != max_genid)
 ):
     raise SystemExit(
         f"Search stopped at generation {actual}; expected generation {max_genid}."
@@ -379,17 +393,18 @@ verify_reached_checkpoints() {
     PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$worktree_path" \
     "$venv_path/bin/python" - "$run_output" "$private_output" "$max_genid" \
         "$phase" "$stop_token_budget" "${checkpoint_budgets[*]}" \
-        "${generation_checkpoints[*]}" "${search_hour_checkpoints[*]}" <<'PY'
+        "${generation_checkpoints[*]}" "${search_hour_checkpoints[*]}" "$early_stop" "$(read_search_status)" <<'PY'
 import json
 import os
 import sys
 
-from measurement.held_out import checkpoint_tests_complete
+from measurement.early_stopping import read_final_checkpoint
+from measurement.held_out import checkpoint_tests_complete, materialize_checkpoint_tests
 from measurement.token_accounting import (
     cumulative_total, read_evaluation_records, scan_generation_token_totals,
 )
 
-run_output, private_dir, max_genid, phase, stop_budget, tokens, generations, hours = sys.argv[1:]
+run_output, private_dir, max_genid, phase, stop_budget, tokens, generations, hours, early_stop, stop_status = sys.argv[1:]
 with open(os.path.join(run_output, "archive.jsonl"), encoding="utf-8") as handle:
     archive = [json.loads(line) for line in handle if line.strip()][-1]
 last_generation = archive["current_genid"]
@@ -420,10 +435,21 @@ for prefix, budgets, reached, field, scale in dimensions:
         with open(checkpoint_path, encoding="utf-8") as handle:
             checkpoint = json.load(handle)
         if not checkpoint_tests_complete(private_dir, checkpoint, ["paper_review"]):
+            materialize_checkpoint_tests(private_dir, checkpoint)
+        if not checkpoint_tests_complete(private_dir, checkpoint, ["paper_review"]):
             raise SystemExit(f"Reached checkpoint has incomplete isolated held-out tests: {checkpoint_path}")
         reached_count += 1
 if reached_count == 0 and not stop_budget and phase not in ("long-run-start", "long-run-resume"):
     raise SystemExit(f"No checkpoint was reached by generation {max_genid}.")
+if early_stop == "true" and stop_status == "stopped":
+    final = read_final_checkpoint(run_output)
+    if final is None:
+        raise SystemExit("Stopped search lacks its frozen final measurement")
+    if not checkpoint_tests_complete(private_dir, final, ["paper_review"]):
+        materialize_checkpoint_tests(private_dir, final)
+    if not checkpoint_tests_complete(private_dir, final, ["paper_review"]):
+        raise SystemExit("Final isolated held-out tests are incomplete")
+    print("FINAL_MEASUREMENT_VERIFIED")
 print(f"REACHED_CHECKPOINTS_VERIFIED={reached_count}")
 PY
 }
@@ -490,6 +516,39 @@ if [[ "${1:-}" == "summary" ]]; then
     exit 0
 fi
 
+early_stop="true"
+early_stop_min_generations="10"
+early_stop_patience="5"
+generation_limit=""
+positional_args=()
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        --early_stop|--early_stop_min_generations|--early_stop_patience|--generation_limit)
+            option="$1"
+            if [[ "$#" -lt 2 ]]; then
+                echo "ERROR: $option requires a value" >&2
+                exit 2
+            fi
+            if [[ "$option" == --early_stop ]]; then
+                [[ "$2" == true || "$2" == false ]] || { echo "ERROR: early_stop must be true or false" >&2; exit 2; }
+            elif [[ ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "ERROR: $option requires a positive integer" >&2
+                exit 2
+            fi
+            case "$option" in
+                --early_stop) early_stop="$2" ;;
+                --early_stop_min_generations) early_stop_min_generations="$2" ;;
+                --early_stop_patience) early_stop_patience="$2" ;;
+                --generation_limit) generation_limit="$2" ;;
+            esac
+            shift 2
+            ;;
+        --*) echo "ERROR: unknown option: $1" >&2; exit 2 ;;
+        *) positional_args+=("$1"); shift ;;
+    esac
+done
+set -- "${positional_args[@]}"
+
 if [[ "$#" -lt 2 || "$#" -gt 5 ]]; then
     usage >&2
     exit 2
@@ -498,7 +557,7 @@ fi
 readonly profile="$1"
 readonly phase="$2"
 readonly stop_token_budget="${4:-}"
-readonly generation_limit="${5:-}"
+generation_limit="${5:-$generation_limit}"
 configure_profile "$profile"
 
 case "$phase" in
@@ -533,7 +592,7 @@ case "$phase" in
                 exit 2
             fi
         fi
-        if [[ "$#" -eq 5 ]]; then
+        if [[ -n "$generation_limit" ]]; then
             if [[ ! "$generation_limit" =~ ^[1-9][0-9]*$ ]]; then
                 echo "ERROR: generation limit must be a positive integer." >&2
                 exit 2
@@ -550,6 +609,22 @@ case "$phase" in
         exit 2
         ;;
 esac
+
+if [[ "$phase" != long-run-start && "$phase" != long-run-resume ]]; then
+    early_stop="false"
+elif [[ -z "$generation_limit" && -z "$stop_token_budget" ]]; then
+    generation_limit="$max_generation_target"
+fi
+readonly early_stop early_stop_min_generations early_stop_patience generation_limit
+early_stop_args=(
+    --early_stop "$early_stop"
+    --early_stop_min_generations "$early_stop_min_generations"
+    --early_stop_patience "$early_stop_patience"
+)
+search_control_args=("${early_stop_args[@]}")
+if [[ -n "$generation_limit" ]]; then
+    search_control_args+=(--generation_limit "$generation_limit")
+fi
 
 checkpoint_budgets=()
 stop_args=()
@@ -690,6 +765,9 @@ else
         exit 1
     fi
     search_finished=false
+    if [[ "$(read_search_status)" == stopped ]]; then
+        search_finished=true
+    fi
     if [[ -n "$stop_token_budget" ]]; then
         cumulative_tokens="$(read_cumulative_tokens)"
         if (( cumulative_tokens >= stop_token_budget )); then
@@ -705,6 +783,7 @@ else
     if [[ "$search_finished" == true ]]; then
         verify_search_completion "$max_generation_target"
         if verify_reached_checkpoints "$max_generation_target"; then
+            write_formal_results
             echo "FORMAL_LONG_RUN_SEARCH_AND_TESTS_ALREADY_COMPLETED"
             exit 0
         fi
@@ -1007,6 +1086,7 @@ if [[ "$phase" == "calibrate" ]]; then
 
     echo "Starting generation-1 calibration at $(date --iso-8601=seconds)"
     "$VIRTUAL_ENV/bin/python" generate_loop.py \
+        --early_stop false \
         --run_id "$run_id" \
         --max_generation 1 \
         --output_dir_parent "$worktree_path/outputs" \
@@ -1019,6 +1099,7 @@ if [[ "$phase" == "calibrate" ]]; then
 elif [[ "$phase" == "continue" ]]; then
     echo "Resuming generations 2-5 with token budgets ${token_budgets[*]} at $(date --iso-8601=seconds)"
     "$VIRTUAL_ENV/bin/python" generate_loop.py \
+        --early_stop false \
         --max_generation 5 \
         --resume_from "$run_output" \
         --token_budgets "${token_budgets[@]}" \
@@ -1034,6 +1115,7 @@ elif [[ "$phase" == "continue" ]]; then
 elif [[ "$phase" == "checkpoint-smoke" ]]; then
     echo "Starting fresh generations 1-5 with token budgets ${token_budgets[*]} at $(date --iso-8601=seconds)"
     "$VIRTUAL_ENV/bin/python" generate_loop.py \
+        --early_stop false \
         --run_id "$run_id" \
         --max_generation 5 \
         --output_dir_parent "$worktree_path/outputs" \
@@ -1059,16 +1141,22 @@ elif [[ "$phase" == "long-run-start" ]]; then
         --token_budgets "${checkpoint_budgets[@]}" \
         "${stop_args[@]}" \
         "${checkpoint_args[@]}" \
+        "${search_control_args[@]}" \
         --test_eval_samples 50 \
         --test_eval_repeats 3 \
         "${generate_args[@]}"
 
     verify_search_completion "$max_generation_target"
     verify_reached_checkpoints "$max_generation_target"
+    write_formal_results
     verify_generated_repository
     summarize_one "$profile"
     if [[ -z "$stop_token_budget" ]]; then
-        echo "FORMAL_LONG_RUN_THROUGH_GENERATION_${max_generation_target}_COMPLETED"
+        if [[ "$(read_search_status)" == stopped ]]; then
+            echo "FORMAL_LONG_RUN_SEARCH_STOPPED_AND_TESTS_COMPLETED"
+        else
+            echo "FORMAL_LONG_RUN_THROUGH_GENERATION_${max_generation_target}_COMPLETED"
+        fi
     fi
 else
     echo "Resuming formal search/checkpoints through generation $max_generation_target (completed: $completed_generation) with token budgets ${checkpoint_budgets[*]} at $(date --iso-8601=seconds)"
@@ -1078,16 +1166,22 @@ else
         --token_budgets "${checkpoint_budgets[@]}" \
         "${stop_args[@]}" \
         "${checkpoint_args[@]}" \
+        "${search_control_args[@]}" \
         --test_eval_samples 50 \
         --test_eval_repeats 3 \
         "${generate_args[@]}"
 
     verify_search_completion "$max_generation_target"
     verify_reached_checkpoints "$max_generation_target"
+    write_formal_results
     verify_generated_repository
     summarize_one "$profile"
     if [[ -z "$stop_token_budget" ]]; then
-        echo "FORMAL_LONG_RUN_THROUGH_GENERATION_${max_generation_target}_COMPLETED"
+        if [[ "$(read_search_status)" == stopped ]]; then
+            echo "FORMAL_LONG_RUN_SEARCH_STOPPED_AND_TESTS_COMPLETED"
+        else
+            echo "FORMAL_LONG_RUN_THROUGH_GENERATION_${max_generation_target}_COMPLETED"
+        fi
     fi
 fi
 
@@ -1099,7 +1193,9 @@ fi
 
 if [[ -n "$stop_token_budget" ]]; then
     cumulative_tokens="$(read_cumulative_tokens)"
-    if (( cumulative_tokens >= stop_token_budget )); then
+    if [[ "$early_stop" == true && "$(read_search_status)" == stopped ]]; then
+        echo "FORMAL_LONG_RUN_SEARCH_STOPPED_AND_TESTS_COMPLETED"
+    elif (( cumulative_tokens >= stop_token_budget )); then
         echo "FORMAL_LONG_RUN_TOKEN_BUDGET_${stop_token_budget}_COMPLETED"
     elif [[ -n "$generation_limit" ]] && (( max_generation_target >= generation_limit )); then
         echo "FORMAL_LONG_RUN_GENERATION_LIMIT_${generation_limit}_COMPLETED"
@@ -1118,7 +1214,8 @@ if [[ -n "$stop_token_budget" ]]; then
                 long-run-resume \
                 "$next_generation_target" \
                 "$stop_token_budget" \
-                "${generation_limit_args[@]}"
+                "${generation_limit_args[@]}" \
+                "${early_stop_args[@]}"
         )"
         echo "TOKEN_BUDGET_CONTINUATION_JOB=${next_job_id%%;*}"
     fi

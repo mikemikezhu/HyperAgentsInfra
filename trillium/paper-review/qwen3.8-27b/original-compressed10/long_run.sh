@@ -15,20 +15,38 @@ readonly script_path="$script_dir/long_run.sh"
 # Global limits are distinct from each job's generation endpoint.
 generation_limit=""
 stop_token_budget=""
+early_stop="true"
+early_stop_min_generations="10"
+early_stop_patience="5"
 if [[ "${1:-}" == --* ]]; then
     while [[ "$#" -gt 0 ]]; do
-        if [[ "$#" -lt 2 || ! "$2" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Usage: bash $script_path [--max_generation <generations>] [--stop_token_budget <tokens>]" >&2
+        if [[ "$#" -lt 2 ]]; then
+            echo "Usage: bash $script_path [--max_generation <generations>] [--stop_token_budget <tokens>] [--early_stop true|false] [--early_stop_min_generations <generations>] [--early_stop_patience <attempts>]" >&2
+            exit 2
+        fi
+        if [[ "$1" == --early_stop || "$1" == --early-stop ]]; then
+            [[ "$2" == true || "$2" == false ]] || { echo "ERROR: early_stop must be true or false" >&2; exit 2; }
+        elif [[ ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: $1 requires a positive integer" >&2
             exit 2
         fi
         case "$1" in
             --max_generation|--max-generation) generation_limit="$2" ;;
             --stop_token_budget|--stop-token-budget) stop_token_budget="$2" ;;
+            --early_stop|--early-stop) early_stop="$2" ;;
+            --early_stop_min_generations|--early-stop-min-generations) early_stop_min_generations="$2" ;;
+            --early_stop_patience|--early-stop-patience) early_stop_patience="$2" ;;
             *) echo "ERROR: unknown option: $1" >&2; exit 2 ;;
         esac
         shift 2
     done
 fi
+
+search_control_args=(
+    --early_stop "$early_stop"
+    --early_stop_min_generations "$early_stop_min_generations"
+    --early_stop_patience "$early_stop_patience"
+)
 
 if [[ -n "$stop_token_budget" && -z "$generation_limit" ]]; then
     echo "ERROR: Trillium token-limited chains also require --max_generation; compute nodes cannot submit continuations." >&2
@@ -48,7 +66,7 @@ if [[ "$#" -eq 0 ]]; then
     generation_limit="${generation_limit:-30}"
     stop_limit_args=()
     if [[ -n "$stop_token_budget" ]]; then
-        stop_limit_args=("$stop_token_budget" "$generation_limit")
+        stop_limit_args=("$stop_token_budget")
     fi
     for (( segment_start=0; segment_start < generation_limit; segment_start+=5 ))
     do
@@ -74,7 +92,9 @@ if [[ "$#" -eq 0 ]]; then
                 "$script_path" \
                 "$phase" \
                 "$max_generation" \
-                "${stop_limit_args[@]}"
+                "${stop_limit_args[@]}" \
+                --generation_limit "$generation_limit" \
+                "${search_control_args[@]}"
         )"
         job_id="${job_id%%;*}"
         job_chain="${job_chain:+$job_chain -> }$job_id"
