@@ -6,7 +6,6 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=96G
 #SBATCH --time=12:00:00
-#SBATCH --partition=gpubase_bygpu_b2
 #SBATCH --account=rrg-bengioy-ad
 #SBATCH --output=%x-%j.out
 
