@@ -516,7 +516,7 @@ if [[ "${1:-}" == "summary" ]]; then
     exit 0
 fi
 
-early_stop="true"
+early_stop="false"
 early_stop_min_generations="10"
 early_stop_patience="5"
 generation_limit=""

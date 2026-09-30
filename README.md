@@ -34,14 +34,14 @@ hf download \
 
 ## Formal search stopping and results
 
-Each Paper Review `long_run.sh` enables validation early stopping by default.
-The defaults are 10 warmup generations, patience 5, and a global cap of 30
-generations. Generations 1–10 update the best selection score without consuming
+Each Paper Review `long_run.sh` disables validation early stopping by default,
+with a global cap of 30 generations. If explicitly enabled, early stopping uses
+10 warmup generations and patience 5. Generations 1–10 update the best selection score without consuming
 patience. After warmup, only a strict improvement resets patience; ties, lower
 scores, and completed failed attempts each consume one step. Failed attempts
 remain `None`, not zero. Scores retain the existing staged-evaluation adjustment.
 
-From the Infra root, for example:
+To explicitly enable early stopping from the Infra root:
 
 ```bash
 bash nibi/paper-review/qwen3.8-27b/original-compressed10/long_run.sh \
@@ -51,7 +51,7 @@ bash nibi/paper-review/qwen3.8-27b/original-compressed10/long_run.sh \
     --early_stop_patience 5
 ```
 
-Use `--early_stop false` to retain the original search/checkpoint behavior.
+The default `--early_stop false` retains the original search/checkpoint behavior.
 An explicitly configured `--stop_token_budget` still applies. All segments
 receive the same stopping parameters; patience is recovered in Python from
 the archive and host-private evaluation records, not maintained in shell.

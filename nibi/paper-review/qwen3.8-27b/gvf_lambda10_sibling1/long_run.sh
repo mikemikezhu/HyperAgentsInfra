@@ -17,7 +17,7 @@ readonly script_path="$script_dir/long_run.sh"
 # Global limits are distinct from each job's generation endpoint.
 generation_limit=""
 stop_token_budget=""
-early_stop="true"
+early_stop="false"
 early_stop_min_generations="10"
 early_stop_patience="5"
 if [[ "${1:-}" == --* ]]; then
