@@ -34,6 +34,12 @@ hf download \
 
 ## Formal search stopping and results
 
+On Nibi, Rorqual and Fir, A1/A3/A4 run five generations per job and request
+36 hours; A2/A5 retain ten generations per job and 36 hours. Trillium retains
+five generations per job and 24 hours for all methods. The first job also runs
+generation 0. These segment sizes apply to both generation-limited chains and
+token-budget continuations.
+
 Each Paper Review `long_run.sh` disables validation early stopping by default,
 with a global cap of 30 generations. If explicitly enabled, early stopping uses
 10 warmup generations and patience 5. Generations 1–10 update the best selection score without consuming

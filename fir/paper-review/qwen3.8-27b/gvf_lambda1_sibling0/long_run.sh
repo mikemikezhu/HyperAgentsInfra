@@ -5,7 +5,7 @@
 #SBATCH --gpus-per-node=h100:2
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=96G
-#SBATCH --time=2-00:00:00
+#SBATCH --time=1-12:00:00
 #SBATCH --account=rrg-bengioy-ad
 #SBATCH --output=%x-%j.out
 
@@ -51,7 +51,7 @@ search_control_args=(
 )
 
 if [[ -n "$stop_token_budget" ]]; then
-    first_generation_target=10
+    first_generation_target=5
     generation_limit_args=()
     if [[ -n "$generation_limit" ]]; then
         generation_limit_args=(--generation_limit "$generation_limit")
@@ -83,9 +83,9 @@ if [[ "$#" -eq 0 ]]; then
     previous_job_id=""
     job_chain=""
     generation_limit="${generation_limit:-30}"
-    for (( segment_start=0; segment_start < generation_limit; segment_start+=10 ))
+    for (( segment_start=0; segment_start < generation_limit; segment_start+=5 ))
     do
-        max_generation="$((segment_start + 10))"
+        max_generation="$((segment_start + 5))"
         if (( max_generation > generation_limit )); then
             max_generation="$generation_limit"
         fi
