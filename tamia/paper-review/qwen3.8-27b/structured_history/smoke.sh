@@ -1,0 +1,22 @@
+#!/bin/bash
+#SBATCH --job-name=ha-pr-history-q38
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gpus-per-node=h200:8
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=0
+#SBATCH --time=1-00:00:00
+#SBATCH --account=aip-bengioy
+#SBATCH --output=%x-%j.out
+
+set -euo pipefail
+
+readonly launcher_path="${SLURM_SUBMIT_DIR:?Submit this script from the HyperAgentsInfra root}/tamia/paper-review/qwen3.8-27b/launcher.sh"
+
+if [[ ! -x "$launcher_path" ]]; then
+    echo "ERROR: launcher not found: $launcher_path" >&2
+    echo "Submit this script from the HyperAgentsInfra repository root." >&2
+    exit 1
+fi
+
+exec "$launcher_path" structured_history "$@"

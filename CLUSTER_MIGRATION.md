@@ -2,6 +2,9 @@
 
 For Trillium's paths, full-node GPU request and login-submitted five-generation
 chains, also follow [Trillium Paper Review](trillium/README.md).
+For TamIA's eight-H200 allocation, asset paths and eight-generation chains,
+follow [TamIA Paper Review](tamia/README.md). Its `prepare_worktrees.sh` implements
+step 6 below using the shared pinned revisions, without resetting existing work.
 
 ## 1. Clone repositories
 
@@ -168,10 +171,10 @@ git -C /path/to/scratch/HyperAgents/HyperAgents worktree add \
 cd /path/to/scratch/HyperAgents/HyperAgentsInfra
 
 bash -n \
-    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-rorqual-or-trillium>/paper-review/qwen3.8-27b/launcher.sh"
+    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-rorqual-trillium-or-tamia>/paper-review/qwen3.8-27b/launcher.sh"
 
 for script_path in \
-    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-rorqual-or-trillium>"/paper-review/qwen3.8-27b/*/*.sh
+    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-rorqual-trillium-or-tamia>"/paper-review/qwen3.8-27b/*/*.sh
 do
     bash -n "$script_path"
 done
@@ -208,7 +211,7 @@ cd /path/to/scratch/HyperAgents/HyperAgentsInfra
 
 sbatch \
     --time=08:00:00 \
-    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-rorqual-or-trillium>/paper-review/qwen3.8-27b/gvf_reason_sibling0/smoke.sh" \
+    "/path/to/scratch/HyperAgents/HyperAgentsInfra/<fir-nibi-rorqual-trillium-or-tamia>/paper-review/qwen3.8-27b/gvf_reason_sibling0/smoke.sh" \
     calibrate
 
 squeue \
