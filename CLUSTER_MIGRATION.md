@@ -6,6 +6,13 @@ For TamIA's eight-H200 allocation, asset paths and eight-generation chains,
 follow [TamIA Paper Review](tamia/README.md). Its `prepare_worktrees.sh` implements
 step 6 below using the shared pinned revisions, without resetting existing work.
 
+For the TamIA scratch-first layout, replace `/path/to/scratch` below with
+`$SCRATCH` (`/scratch/m/mikezhu` for mikezhu), and replace
+`/path/to/persistent/project/directory` with `$SCRATCH/HyperAgents` throughout
+installation, model download, preflight and submission. The project placeholder
+does not require project storage on TamIA. Configure the login-side caches as
+shown in the [TamIA workspace instructions](tamia/README.md#prepare-the-workspace).
+
 ## 1. Clone repositories
 
 ```bash

@@ -42,18 +42,52 @@ configuration and Matplotlib configuration use writable `SLURM_TMPDIR` paths.
 
 Follow [Cluster Migration](../CLUSTER_MIGRATION.md), cloning the repositories
 to `$SCRATCH/HyperAgents/HyperAgents` and `$SCRATCH/HyperAgents/HyperAgentsInfra`.
-Rebuild the venv on TamIA; do not copy a venv from a different cluster.
+Use personal scratch for the venv and model as well: this migration does not
+depend on project storage access or its limited remaining file quota.
+For mikezhu, `$SCRATCH` is `/scratch/m/mikezhu`; keep `$SCRATCH` in commands
+rather than copying another cluster's absolute paths. Rebuild the venv on TamIA;
+do not copy a venv from a different cluster.
 
 | Asset | Default path | Optional override |
 | --- | --- | --- |
+| A1/A2 development repository | `$SCRATCH/HyperAgents/HyperAgents` | — |
+| A3/A4 development worktree | `$SCRATCH/HyperAgents/HyperAgents-gvf` | — |
+| A5 development worktree | `$SCRATCH/HyperAgents/HyperAgents-structured-history` | — |
+| Infrastructure repository | `$SCRATCH/HyperAgents/HyperAgentsInfra` | — |
 | Experiment worktrees | `$SCRATCH/HyperAgents/experiments` | `HYPERAGENTS_EXPERIMENT_ROOT` |
 | Python/vLLM venv | `$SCRATCH/HyperAgents/venv` | `HYPERAGENTS_VENV_PATH` |
 | Model | `$SCRATCH/HyperAgents/model/Qwen3.8-27B` | `HYPERAGENTS_MODEL_PATH` |
 | Container | `$SCRATCH/apptainer_images/hyperagents-text-eaa0a09.sif` | `HYPERAGENTS_APPTAINER_IMAGE` |
 
-If using project storage, set the overrides to verified TamIA paths before
-submission; a compute account name does not establish a project storage path.
-Scratch assets remain subject to the site's retention policy.
+All 11 profiles, including start, resume and smoke phases, share these defaults.
+Each experiment keeps its own `paper-review-<profile>-qwen38/source/outputs`;
+the venv, model and container are shared, not copied into each worktree.
+Existing `HYPERAGENTS_*` path overrides still take precedence: check that any
+exported values match this layout before preparation or submission.
+The compute account remains `aip-bengioy`; using it does not require storing
+files in its project directory or grant access to that directory.
+
+Before running the migration guide's installation and download commands, set
+these caches in the same login shell (not just inside a temporary `bash` session):
+
+```bash
+export UV_CACHE_DIR="$SCRATCH/uv-cache"
+export HF_HOME="$SCRATCH/huggingface-cache"
+export HF_HUB_CACHE="$HF_HOME/hub"
+mkdir -p "$UV_CACHE_DIR" "$HF_HUB_CACHE"
+```
+
+These are installation/download caches, not the model directory. During jobs,
+the launcher sets runtime caches under `$SLURM_TMPDIR/hyperagents-cache`,
+FlashInfer's workspace to `$SLURM_TMPDIR/flashinfer`, and Matplotlib/vLLM
+configuration to `$SLURM_TMPDIR/hyperagents-config/{matplotlib,vllm}`.
+Keep experiment outputs on scratch, not in these job-temporary directories.
+
+Check both space and file-count quotas after installation and before formal
+runs; logs and installation caches also consume quota. Scratch assets remain
+subject to the site's retention policy, so keep code and important results
+backed up outside scratch. Only use project overrides after verifying both
+access and sufficient quota.
 
 From the TamIA login node, after fetching the pinned revisions:
 
