@@ -1199,7 +1199,7 @@ if [[ -n "$stop_token_budget" ]]; then
         echo "FORMAL_LONG_RUN_GENERATION_LIMIT_${generation_limit}_COMPLETED"
     else
         case "$profile" in
-            original-full|gvf_*) next_generation_target="$((max_generation_target + 5))" ;;
+            original-full|structured_history|gvf_*) next_generation_target="$((max_generation_target + 5))" ;;
             *) next_generation_target="$((max_generation_target + 10))" ;;
         esac
         if [[ -n "$generation_limit" ]] && (( next_generation_target > generation_limit )); then
