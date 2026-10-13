@@ -5,7 +5,7 @@
 #SBATCH --gpus-per-node=h200:8
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=0
-#SBATCH --time=1-00:00:00
+#SBATCH --time=12:00:00
 #SBATCH --account=aip-bengioy
 #SBATCH --output=%x-%j.out
 
@@ -70,9 +70,9 @@ if [[ "$#" -eq 0 ]]; then
     if [[ -n "$stop_token_budget" ]]; then
         stop_limit_args=("$stop_token_budget")
     fi
-    for (( segment_start=0; segment_start < generation_limit; segment_start+=8 ))
+    for (( segment_start=0; segment_start < generation_limit; segment_start+=4 ))
     do
-        max_generation="$((segment_start + 8))"
+        max_generation="$((segment_start + 4))"
         if (( max_generation > generation_limit )); then
             max_generation="$generation_limit"
         fi
