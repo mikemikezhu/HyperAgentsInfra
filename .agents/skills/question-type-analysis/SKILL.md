@@ -1,12 +1,20 @@
 ---
 name: question-type-analysis
-description: Classify tracked GVF questions across HyperAgents generations using semantic multi-label annotation and export traceable per-generation CSV statistics.
+description: Classify tracked GVF question content using semantic multi-label annotation and export CSV statistics; when requested, examine how QA supports cross-version comparison and exploration.
 ---
 
 # Question Type Analysis
 
 Analyze what the tracked GVF questions ask about. Produce auditable
 annotations and per-generation statistics using the taxonomy below.
+
+Check the prompts used by the analyzed run, including changes during
+evolution. QuestionModule asks about observable properties that Frozen QA
+answers independently for each version. MetaAgent combines those answers
+and training history to compare versions and decide what to change.
+A question can support comparison or exploration without explicitly
+requesting either. Classify its content separately from how its answers
+are used.
 
 ## Inputs and scope
 
@@ -64,43 +72,24 @@ Describing a parser alone does not qualify. Repair belongs here as well
 as type 1 when the question also examines its role in decision-making,
 such as whether a repair response becomes an additional vote.
 
-### 3. Cross-version analysis
+### 5. Predictive Behaviour
 
-CSV prefix: `history_comparison`
+CSV prefix: `predictive_behaviour`
 
-Questions explicitly comparing historical versions or examining patterns
-across the search history.
-
-Include:
-
-- Current versus earlier policy mechanisms or prompt clauses.
-- Previously attempted policy families or recurring modification patterns.
-- Strategy differences between historical candidates.
-
-Local current-versus-original comparisons qualify; a question need not
-summarize the entire search history.
-
-Mentioning a generation number alone does not qualify. Comparing two
-components within the same version does not qualify. Conversation
-`msg_history` is not automatically evolutionary search history.
-
-### 4. Exploration
-
-CSV prefix: `exploration`
-
-Questions explicitly requesting new strategy hypotheses, alternative
-policy families, or a choice of future search direction.
+Questions about observed task predictions, their distribution, and errors.
 
 Include:
 
-- Asking which different decision process should be tried.
-- Proposing an untried mechanism to address a failure mode.
-- Asking whether to change policy families rather than tune the
-  current mechanism.
+- Predicted label counts or proportions, including comparisons with targets.
+- Correctness, error directions, and patterns across correct or incorrect cases.
+- Decision grounds expressed in actual predictions or misclassified examples.
+- Observed verdict changes after verification and whether they improve correctness.
 
-Describing an existing mechanism or inactive implementation is not
-sufficient. A question's potential usefulness for improvement does not,
-by itself, make it an exploration question.
+Questions about decision rules in code or prompts alone remain type 2.
+When a question also examines decision grounds in actual outputs, assign
+both types 2 and 5. Output parsing, schema, and execution-failure audits
+alone remain type 1; also assign type 5 when the question separately asks
+about task-label distributions or prediction errors.
 
 ## Annotation procedure
 
@@ -109,7 +98,9 @@ by itself, make it an exploration question.
    repeated IDs have identical text; report conflicts rather than
    silently merging them.
 3. Classify each unique question semantically. Assign every applicable
-   category, with each category counted at most once per question.
+   content category, with each category counted at most once per question.
+   For questions phrased as comparisons or proposals, classify their subject;
+   this does not establish that MetaAgent performed the comparison or change.
 4. Record a short rationale grounded in what the question actually asks.
 5. Reuse the annotation whenever the same question reappears, then
    expand annotations back to each generation.
@@ -135,8 +126,29 @@ Examples:
 - "Does repair only fix formatting, or does its verdict enter the vote?"
   -> [1, 2]
 - "How does the current voting rule differ from the original version?"
-  -> [2, 3]
-- "What alternative to repeated voting should we try next?" -> [4]
+  -> [2]
+- "What alternative to repeated voting should we try next?" -> [2]
+- "How many false accepts and false rejects occurred?" -> [5]
+- "Which review criteria are cited in the misclassified examples?" -> [2, 5]
+- "How many predictions are accept or reject, and are any invalid?" -> [1, 5]
+
+## Information use, when requested
+
+Analyze these functions separately from question content, using QA answers,
+MetaAgent records, and patches:
+
+- **Cross-version analysis:** compare answers about the same property across
+  identified versions. Distinguish differences or similarities in the answers
+  from evidence that MetaAgent actually compared them. Account for different
+  training samples and stochastic outputs when interpreting results.
+- **Exploration support:** trace QA information to a concrete proposed change
+  or search direction. Distinguish a proposal from its implementation in a
+  patch, and a repair or parameter adjustment from a new decision mechanism.
+
+Cite source locations and version IDs. Potential usefulness alone does not
+establish use, and a later code change alone does not show that QA motivated
+it. State when evidence is insufficient. Assess use separately for each
+generation, even when question IDs repeat.
 
 ## Aggregation
 
@@ -144,18 +156,19 @@ For generation g and category k:
 
 - `n_questions`: number of tracked questions in that generation.
 - `count_k`: number of those questions assigned category k.
-- `total_labels`: sum of the four category counts.
+- `total_labels`: sum of the three content-category counts (IDs 1, 2, 5).
 - `label_share_k`: `count_k / total_labels`.
 
 The default metric is **label share**, not question coverage.
 Store shares as fractions from 0 to 1.
 
 Example: four questions with labels [1], [1], [1, 2], [1] produce
-five labels and shares of 0.8, 0.2, 0, 0.
+five labels and shares of 0.8, 0.2, 0 in category order 1, 2, 5.
 
 If question coverage is requested, calculate it separately as
 `count_k / n_questions`. Coverage can sum to more than 100% under
 multi-label classification. Never interchange the two metrics.
+Information-use findings are not included in the content-share denominator.
 
 Missing files are missing observations, not zero counts. An empty
 question set has zero counts and undefined shares; report this explicitly.
@@ -174,15 +187,18 @@ Each row represents one generation. Preserve these column names and order:
 - `interface_label_share`
 - `policy_mechanism_count`
 - `policy_mechanism_label_share`
-- `history_comparison_count`
-- `history_comparison_label_share`
-- `exploration_count`
-- `exploration_label_share`
+- `predictive_behaviour_count`
+- `predictive_behaviour_label_share`
 - `question_annotations`
 - `source_questions_path`
 
 Store `question_annotations` as a JSON array containing each question's
 `question_id`, sorted `types`, and `rationale`.
+
+If information-use analysis is requested, export its findings to a separate
+CSV with `generation,question_id,function,finding,evidence`. Use
+`cross_version_analysis` or `exploration_support` for `function`; include
+source paths, locations, and version IDs in `evidence`.
 
 Preserve source paths so each annotation can be checked against the
 original question text. Report both the number of question occurrences
@@ -202,13 +218,10 @@ range covered, and any missing or unresolved records.
 
 ## Interpretation limits
 
-This analysis covers the formal tracked questions. It does not classify
-Frozen QA answers, QuestionModule reasoning, MetaAgent reasoning, or
-implemented policy changes.
-
-A zero exploration-question count does not establish that the agent
-performed no exploration. Likewise, few cross-version questions do not
-establish that the MetaAgent failed to compare historical candidates.
+The default content analysis covers the formal tracked questions.
+Information-use analysis separately examines QA answers, MetaAgent records,
+and implemented changes. Content-label frequencies do not establish how
+much cross-version comparison or exploration MetaAgent performed.
 
 Label share is not token share, attention allocation, usefulness, or
 causal contribution to performance. Long and short questions each count
