@@ -969,13 +969,12 @@ if [[ "$profile" == gvf_map ]]; then
         --lineage_depth 3 --migrants 1 --train_samples 10 --val_samples 50
         --test_samples 50 --test_repeats 3 --stop_token_budget 192000000
         --token_checkpoints "${token_budgets[@]}"
-        --attempt_checkpoints "${generation_checkpoints[@]}"
         --hour_checkpoints "${search_hour_checkpoints[@]}"
     )
     if [[ "$phase" == map-smoke ]]; then
         map_args+=(--steps_per_round 1 --capacity 2 --train_samples 2 --val_samples 2
                    --test_samples 2 --test_repeats 1 --stop_token_budget 6000000
-                   --token_checkpoints 1000000 3000000 6000000 --attempt_checkpoints 0 2 4)
+                   --token_checkpoints 1000000 3000000 6000000)
         "$VIRTUAL_ENV/bin/python" generate_map_loop.py "${map_args[@]}" --max_rounds_this_job 1
         "$VIRTUAL_ENV/bin/python" generate_map_loop.py "${map_args[@]}"
     else
