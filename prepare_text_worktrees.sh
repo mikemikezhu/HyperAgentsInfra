@@ -4,12 +4,13 @@ set -euo pipefail
 # The same detached-worktree preparation used by tamia/prepare_worktrees.sh,
 # scoped to the new tasks; existing Paper Review worktrees are never updated.
 readonly infra_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-if [[ "$#" -ne 2 ]]; then
-    echo "Usage: bash $0 <nibi|rorqual|fir|tamia|trillium> <imo-grading|search-arena>" >&2
+if [[ "$#" -lt 2 || "$#" -gt 3 ]]; then
+    echo "Usage: bash $0 <cluster> <imo-grading|search-arena|paper-review> [profile]" >&2
     exit 2
 fi
 readonly cluster="$1"
 readonly task="$2"
+readonly requested_profile="${3:-}"
 case "$cluster" in
     nibi|rorqual|fir|tamia|trillium) ;;
     *) echo "ERROR: unsupported cluster: $cluster" >&2; exit 2 ;;
@@ -17,6 +18,13 @@ esac
 case "$task" in
     imo-grading) source "$infra_root/source_shas_imo_grading.env" ;;
     search-arena) source "$infra_root/source_shas_search_arena.env" ;;
+    paper-review)
+        [[ "$cluster" == nibi && "$requested_profile" == gvf_map ]] || {
+            echo "ERROR: Paper Review preparation here is scoped to nibi paper-review gvf_map" >&2; exit 2;
+        }
+        source "$infra_root/source_shas.env"
+        : "${GVF_MAP_SHA:?Pin the reviewed GVF-MAP commit first}"
+        ;;
     *) echo "ERROR: unsupported task: $task" >&2; exit 2 ;;
 esac
 : "${SCRATCH:?SCRATCH is required}"
@@ -32,9 +40,11 @@ done
 
 for script in "$infra_root/$cluster/$task/qwen3.8-27b"/*/long_run.sh; do
     profile="$(basename -- "$(dirname -- "$script")")"
+    [[ -z "$requested_profile" || "$profile" == "$requested_profile" ]] || continue
     case "$profile" in
         original-full|original-compressed10) revision="$COMMON_BASE_SHA" ;;
         structured_history) revision="$STRUCTURED_HISTORY_SHA" ;;
+        gvf_map) revision="${GVF_MAP_SHA:?GVF_MAP_SHA is required for gvf_map only}" ;;
         gvf_*) revision="$GVF_SHA" ;;
         *) echo "ERROR: unknown profile: $profile" >&2; exit 1 ;;
     esac

@@ -82,6 +82,17 @@ configure_profile() {
     local requested_profile="$1"
 
     case "$requested_profile" in
+        gvf_map)
+            worktree_path="$experiment_root/paper-review-gvf_map-qwen38/source"
+            expected_source_sha="${GVF_MAP_SHA:?GVF_MAP_SHA is missing from source_shas.env}"
+            run_id="paper_review_gvf_map_qwen38_smoke5"
+            train_eval_samples="10"
+            val_eval_samples="50"
+            sampling_mode="random_per_gen"
+            vllm_port="18012"
+            use_gvf="0"
+            skip_staged_eval="1"
+            ;;
         original-full)
             worktree_path="$experiment_root/paper-review-original-full-qwen38/source"
             expected_source_sha="$common_base_sha"
@@ -561,6 +572,9 @@ generation_limit="${5:-$generation_limit}"
 configure_profile "$profile"
 
 case "$phase" in
+    map-smoke)
+        [[ "$profile" == gvf_map && "$#" -eq 2 ]] || { usage >&2; exit 2; }
+        ;;
     calibrate)
         if [[ "$#" -ne 2 ]]; then
             usage >&2
@@ -679,7 +693,20 @@ if [[ ! -r "$apptainer_image" ]]; then
     exit 1
 fi
 
-if [[ "$phase" == "calibrate" ]]; then
+if [[ "$profile" == gvf_map ]]; then
+    case "$phase" in
+        long-run-start)
+            [[ ! -e "$run_output" && ! -e "$private_output" ]] || {
+                echo "ERROR: GVF-MAP start output already exists; use long-run-resume." >&2; exit 1;
+            }
+            ;;
+        long-run-resume)
+            [[ -f "$private_output/state.json" ]] || { echo "ERROR: GVF-MAP state missing." >&2; exit 1; }
+            ;;
+        map-smoke) ;;
+        *) echo "ERROR: gvf_map supports map-smoke, long-run-start and long-run-resume." >&2; exit 2 ;;
+    esac
+elif [[ "$phase" == "calibrate" ]]; then
     for path in "$run_output" "$private_output" "$train_baseline" "$val_baseline"
     do
         if [[ -e "$path" ]]; then
@@ -930,6 +957,50 @@ fi
 if ! grep -q "Using Triton/FLA GDN prefill kernel" "$vllm_log"; then
     echo "ERROR: vLLM did not confirm the Triton/FLA GDN prefill backend." >&2
     exit 1
+fi
+
+if [[ "$profile" == gvf_map ]]; then
+    map_args=(
+        --output_dir "$run_output"
+        --apptainer_image "$HYPERAGENTS_APPTAINER_IMAGE"
+        --eval_subset _filtered_100_train --seed "$eval_seed_base" --eval_workers 8
+        --islands 2 --steps_per_round 5 --capacity 8 --reevaluations 1
+        --alpha 0.2 --beta 0.1 --max_questions 4 --max_features 2 --max_options 3
+        --lineage_depth 3 --migrants 1 --train_samples 10 --val_samples 50
+        --test_samples 50 --test_repeats 3 --stop_token_budget 192000000
+        --token_checkpoints "${token_budgets[@]}"
+        --attempt_checkpoints "${generation_checkpoints[@]}"
+        --hour_checkpoints "${search_hour_checkpoints[@]}"
+    )
+    if [[ "$phase" == map-smoke ]]; then
+        map_args+=(--steps_per_round 1 --capacity 2 --train_samples 2 --val_samples 2
+                   --test_samples 2 --test_repeats 1 --stop_token_budget 6000000
+                   --token_checkpoints 1000000 3000000 6000000 --attempt_checkpoints 0 2 4)
+        "$VIRTUAL_ENV/bin/python" generate_map_loop.py "${map_args[@]}" --max_rounds_this_job 1
+        "$VIRTUAL_ENV/bin/python" generate_map_loop.py "${map_args[@]}"
+    else
+        "$VIRTUAL_ENV/bin/python" generate_map_loop.py "${map_args[@]}" --max_rounds_this_job 1
+    fi
+    "$VIRTUAL_ENV/bin/python" - "$private_output/state.json" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1]))
+print('GVF_MAP_STATUS:', state['status'], 'round:', state['round'], 'attempts:', state['attempts'])
+if state['status'] == 'finished':
+    pending = [key for key, value in state['checkpoints'].items() if value['test_status'] == 'pending']
+    if pending:
+        raise SystemExit('Held-out tests incomplete; resume the same run: ' + ', '.join(pending))
+PY
+    [[ -z "$(git -C "$worktree_path" status --porcelain)" ]] || {
+        echo "ERROR: source worktree changed." >&2; exit 1;
+    }
+    map_status="$("$VIRTUAL_ENV/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$private_output/state.json")"
+    if [[ "$phase" != map-smoke && "$map_status" != finished ]]; then
+        cd "$infra_root"
+        next_job_id="$(sbatch --parsable --dependency="afterok:$SLURM_JOB_ID" \
+            "$launcher_dir/gvf_map/long_run.sh" long-run-resume)"
+        echo "GVF_MAP_CONTINUATION_JOB=${next_job_id%%;*}"
+    fi
+    exit 0
 fi
 
 generate_args=(
