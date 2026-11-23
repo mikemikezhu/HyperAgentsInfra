@@ -38,6 +38,10 @@ readonly -a generation_checkpoints=(0 5 10 15 20 25 30)
 readonly -a search_hour_checkpoints=(2 4 6 8 10 12)
 
 usage() {
+    if [[ "${token_mode:-false}" == true ]]; then
+        echo "Usage: token_run.sh <profile> [long-run-start|long-run-resume]" >&2
+        return
+    fi
     echo "Usage: $0 <profile> long-run-start|long-run-resume <segment-end> [stop-token-budget] [--generation_limit N] [--early_stop true|false] [--early_stop_min_generations N] [--early_stop_patience N]" >&2
     echo "GVF-MAP: $0 gvf_map long-run-start|long-run-resume 1 192000000, or $0 gvf_map map-smoke" >&2
 }
@@ -254,6 +258,13 @@ print(f"REACHED_CHECKPOINTS_VERIFIED={reached_count}")
 PY
 }
 
+token_mode=false
+if [[ "${1:-}" == --token-run ]]; then
+    shift
+    token_mode=true
+    source "$launcher_dir/token_controls.sh"
+    configure_token_run "$@"
+else
 early_stop="false"
 early_stop_min_generations="10"
 early_stop_patience="5"
@@ -360,6 +371,8 @@ if [[ -n "$stop_token_budget" ]]; then
     stop_args=(--stop_token_budget "$stop_token_budget")
 fi
 
+fi
+
 if [[ ! -d "$worktree_path" || "$(git -C "$worktree_path" rev-parse HEAD)" != "$expected_source_sha" ]]; then
     echo "ERROR: prepare the detached experiment worktree at its reviewed source SHA: $worktree_path" >&2
     exit 1
@@ -381,6 +394,13 @@ if [[ ! -r "$HYPERAGENTS_TOKENIZER_PATH/tokenizer_config.json" || ! -r "$HYPERAG
     exit 1
 fi
 
+if [[ "$token_mode" == true ]]; then
+    lock_token_run "$@"
+elif [[ "$phase" == long-run-resume && -f "$private_output/token_job" ]]; then
+    echo "Use token_run.sh to resume this token run." >&2
+    exit 1
+fi
+
 if [[ "$profile" == gvf_map ]]; then
     case "$phase" in
         long-run-start|map-smoke)
@@ -399,7 +419,7 @@ elif [[ "$phase" == long-run-start ]]; then
             exit 1
         fi
     done
-elif [[ ! -f "$run_output/archive.jsonl" ]]; then
+elif [[ "$phase" != long-run-recover && ! -f "$run_output/archive.jsonl" ]]; then
     echo "ERROR: no completed archive to resume: $run_output" >&2
     exit 1
 fi
@@ -458,7 +478,7 @@ config = {
     )},
 }
 path = Path(private) / "inference_config.json"
-if phase == "long-run-resume":
+if phase in ("long-run-resume", "long-run-recover"):
     if json.loads(path.read_text()) != config:
         raise SystemExit("Inference configuration changed; use a separate experiment directory")
 else:
@@ -466,6 +486,8 @@ else:
     with path.open("x") as handle:
         json.dump(config, handle, indent=2)
 PYCONFIG
+
+if [[ "$token_mode" == true ]]; then arm_timeout_recovery; fi
 
 echo "PROFILE=$profile"
 echo "PHASE=$phase"
@@ -486,6 +508,7 @@ if [[ "$profile" == gvf_map ]]; then
         --token_checkpoints "${token_budgets[@]}"
         --hour_checkpoints "${search_hour_checkpoints[@]}"
     )
+    if [[ "$token_mode" == true ]]; then run_token_search; exit 0; fi
     if [[ "$phase" == map-smoke ]]; then
         map_args+=(--steps_per_round 1 --capacity 2 --train_samples 2 --val_samples 2
                    --test_samples 2 --test_repeats 1 --stop_token_budget 6000000
@@ -571,7 +594,12 @@ run_initial_baseline_split() {
     )"
 
     echo "Starting initial $split baseline with seed $seed at $(date --iso-8601=seconds)"
-    "${baseline_timer[@]}" "$VIRTUAL_ENV/bin/python" -m domains.harness \
+    local harness=(-m domains.harness)
+    if [[ "$token_mode" == true ]]; then
+        if [[ -f "$private_output/baseline-${split}.complete" ]]; then return; fi
+        harness=("$launcher_dir/token_recovery.py" baseline "$run_output" --save_interval 1)
+    fi
+    "${baseline_timer[@]}" "$VIRTUAL_ENV/bin/python" "${harness[@]}" \
         --output_dir "$worktree_path/outputs" \
         --run_id "$baseline_name" \
         --domain paper_review \
@@ -586,6 +614,7 @@ run_initial_baseline_split() {
     "${baseline_timer[@]}" "$VIRTUAL_ENV/bin/python" -m domains.report \
         --domain paper_review \
         --dname "$worktree_path/outputs/$baseline_name"
+    if [[ "$token_mode" == true ]]; then touch "$private_output/baseline-${split}.complete"; fi
 }
 
 verify_generated_repository() {
@@ -660,6 +689,8 @@ if manifest.get("num_samples") != expected_count:
 print("INITIAL_VALIDATION_IS_LABEL_FREE")
 PY
 }
+
+if [[ "$token_mode" == true ]]; then run_token_search; exit 0; fi
 
 if [[ "$phase" == long-run-start ]]; then
     run_initial_baseline_split train

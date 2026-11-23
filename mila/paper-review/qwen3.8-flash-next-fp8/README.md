@@ -37,71 +37,101 @@ Source worktrees are detached at their pinned commits under:
     paper-review-<profile>-qwen38-flash-next-fp8-cairn/source/
 ```
 
-Each profile has a `long_run.sh` CPU wrapper. Submit from the Infra repository
-root, passing `long-run-start <segment-end>` or `long-run-resume <segment-end>`.
-The optional `--generation_limit N` is the global search endpoint, separate from
-the segment endpoint. A fourth positional argument to the launcher (after the
-profile, phase and endpoint) can select one of the existing token budgets.
-For the original, structured-history and GVF profiles, each submission runs one
-explicitly chosen segment; it does not submit a chain or start the other profiles.
-GVF-MAP retains its existing automatic round continuation, as described below.
-Do not launch all profiles concurrently until the
-shared API's permitted usage has been established.
+The four main profiles use the following Paper Review protocols.
 
-The wrappers request `unkillable-cpu`, 2 CPUs, 8 GB and 12 hours. Formal evaluation
-uses one worker initially; this is not a service-wide concurrency limiter and
-does not restrict parallelism introduced by evolved agent code. Memory and
-segment duration have not been measured on Mila.
+| Profile | Train / validation | Search |
+| --- | --- | --- |
+| `original-full` | 50 / 50 | Original sampling and staged evaluation |
+| `original-compressed10` | 10 / 50 | Compressed baseline, random per generation |
+| `gvf_lambda5_sibling0` | 10 / 50 | GVF, selection λ=5, zero siblings |
+| `gvf_map` | 10 / 50 | Two islands, shared batch per round |
 
-The launcher retains Nibi's sample seeds, per-profile train/validation samples,
-selection rules, G/T/H checkpoint thresholds and 50-sample, three-repeat tests.
-It uses independent initial evaluations, outputs and private checkpoint records.
-It records the endpoint, source SHA, tokenizer hashes and SIF hash without the
-key, and requires the same inference configuration on resume. Flash-Next and
-27B results are separate backbone conditions.
+The original and compressed baselines use selection λ=10. Comparing the
+compressed baseline with the main GVF arm therefore varies both GVF and
+selection sharpness. The existing sibling-free GVF λ=10 profile provides
+the matched-λ comparison. A sibling-free λ=1 profile is also available.
 
-## GVF-MAP
+Each profile gets **192M search tokens per run**. Report held-out performance
+at **6M, 12M, 24M, 48M, 96M and 192M**. Both MAP islands share the same budget.
+Held-out evaluations use 50 samples and three repeats, outside the search budget.
+The launcher also retains the MAP 2/4/6/8/10/12 active-search-hour checkpoints.
+Token thresholds are checked at the engine's accounting boundaries. In-flight work can
+finish beyond 192M. Recommendations use only evaluations eligible at each threshold.
+A threshold with no eligible recommendation is reported as unavailable and cannot
+be completed with a later version.
 
-GVF-MAP uses its own `remote-api/gvf-map-hyperagents` source branch and
-`GVF_MAP_SHA`. Its experiment worktree is prepared by the same script above;
-the existing profiles and their source pins are unchanged. The remote client,
-offline tokenizer and Singularity adaptation are reused from remote GVF, while
-the MAP search, prompts, structured QA and call-level token accounting are retained.
+The common token-run wrapper requests 36 hours on `unkillable-cpu`, 2 CPUs and 8 GB, with
+one evaluation worker (one per island for MAP). Submit a profile once from the
+Infra root, for example:
 
-From the Infra repository root on Mila:
+```bash
+sbatch mila/paper-review/qwen3.8-flash-next-fp8/token_run.sh gvf_lambda5_sibling0
+```
+
+Within the allocation the launcher repeatedly advances one generation or one MAP
+round. After each unit, it checks search and held-out results. It starts another
+unit if Slurm's remaining time covers 1.25 times the slower of the last two unit
+durations. Otherwise it submits the same profile with
+`afterok:<current job ID>` and the successor continues from its archive or MAP
+state. MAP can start its final held-out tests in the same allocation. Repeated pending test
+attempts are spaced by at least one minute and use the same time check. Once the results are
+complete, the current job exits immediately. The estimate cannot guarantee that
+an unusually slow generation, round or held-out evaluation will fit.
+
+At the start of each 192M job Slurm registers a five-minute CPU watcher with
+`afternotok` and `--kill-on-invalid-dep=yes`. A successful job automatically
+retires its watcher. On failure the watcher checks the parent allocation with
+`sacct` (or the controller while accounting catches up). Only a confirmed `TIMEOUT` submits a fresh 36-hour allocation; a
+cancellation or a program error ends that chain. The recovery checks the last
+job ID under the run lock so a delayed watcher cannot resume a newer run.
+
+For single-island token jobs, completed mutations and train/validation harness
+calls have host-private checkpoints. Recovery restores their working state and
+output, then retries the interrupted call. The original root remains clean,
+usage from interrupted attempts remains in the search ledger, and the engine
+uses its native scoring and checkpoint logic. Initial evaluations save each
+prediction atomically. The generation archive and its evaluation record are
+reconciled before continuing. Temporary snapshots on shared scratch are
+released after a verified unit. MAP resumes its native island operations and
+completed held-out repeats. GVF history updates and MAP question artifacts become
+visible only after a complete write. An outstanding API request may have to run again.
+
+Use `token_run.sh <profile>` for all nine token profiles. `gvf_map/long_run.sh`
+also starts the MAP token run. The eight single-island `<profile>/long_run.sh`
+scripts retain their published 12-hour generation/wallclock settings. As before,
+use separate prepared experiment roots for independent runs of the same
+profile. Smoke uses its original launcher path.
+
+The alternative λ profiles, both reason-selector profiles and `structured_history`
+share this scheduling and measurement protocol. The launcher records the
+endpoint, source SHA, tokenizer hashes and SIF hash and checks them on resume.
+Each method retains its own source, initial evaluation and output directories.
+The single-island engine passes `iterations_left=0` to the meta-agent when
+called for one generation at a time. The seed meta-agents ignore this optional
+argument. An evolved meta-agent could read it.
+
+## GVF-MAP smoke and long run
+
+Submit the single smoke from the Infra root:
 
 ```bash
 sbatch mila/paper-review/qwen3.8-flash-next-fp8/gvf_map/smoke.sh
-sbatch mila/paper-review/qwen3.8-flash-next-fp8/gvf_map/long_run.sh
 ```
 
-These are separate runs; choose which to submit. The smoke uses a fresh output
-ending in `_smoke`, two islands, one step per round, capacity two, two train/val/test
-samples, one test repeat and a global 6M token limit (1M/3M/6M checkpoints).
-It first runs one round, then resumes within the same job, following Nibi's MAP smoke.
+This separate 12-hour job writes to an output ending in `_smoke`. It runs two
+islands, one step per round, capacity two, two samples for each of train,
+validation and test, and one test repeat. The two islands share a 6M search
+token stop threshold and freeze recommendations at 1M/3M/6M. The smoke takes
+one round, then invokes the engine again within the same allocation to finish.
+There is no formal continuation submission from the smoke.
 
-The long run retains two islands, five steps per round, capacity eight, one
-re-evaluation per step, alpha 0.2, beta 0.1, four candidate questions, at most two
-MAP features with at most three options/bins, lineage depth three and one migrant.
-It uses 10 train samples, 50 validation samples and 50 test samples repeated three
-times. Evaluation uses one worker per island, as in the other Mila profiles;
-the two islands can still issue concurrent API requests.
-
-The global search limit is **192M tokens summed across both islands**, with
-6M/12M/24M/48M/96M/192M token and 2/4/6/8/10/12-hour checkpoints. It does not add
-generation/attempt checkpoints. Each job completes at most one round and submits
-its continuation with `afterok` until search and held-out tests are complete.
-Checkpoint recommendations are frozen during search; tests run after search stops.
-After a failed job, resume the same long run explicitly:
-
-```bash
-sbatch mila/paper-review/qwen3.8-flash-next-fp8/gvf_map/long_run.sh long-run-resume
-```
-
-Resume uses MAP's private `state.json` and the existing inference-configuration
-check, not the older profiles' single generation archive. Both new wrappers use
-the existing Mila 2-CPU / 8-GB / 12-hour template; MAP's actual memory and round
-duration still require measurement. No GPU or local model service is requested.
+The MAP formal profile uses five steps per round, capacity eight, one
+re-evaluation per step, alpha 0.2, beta 0.1, four candidate questions, up to two
+features with at most three bins, lineage depth three and one migrant. Its
+structured QA and call-level accounting come from the pinned
+`remote-api/gvf-map-hyperagents` source. The two islands may issue concurrent
+requests. The single-island profiles retain their original recommendation and
+parent-selection rules.
 
 ## Model settings and remaining validation
 
@@ -120,8 +150,7 @@ sampling combination, thinking caps, actual QA/parent grammars, multi-turn
 tokenization or complete container execution. These remain deployment checks;
 GVF-MAP additionally requires the actual MAP QA JSON schema to be accepted by
 the endpoint, including multi-turn evidence reads and the existing one-correction
-path. A small grammar test alone does not verify this. No remote API, container
-or Slurm run was performed for the MAP migration; validation was static only.
+path. A small grammar test alone does not verify this.
 As with the other profiles,
 the scripts do not automatically probe the service, drop unsupported fields,
 substitute another model or switch to local inference.
