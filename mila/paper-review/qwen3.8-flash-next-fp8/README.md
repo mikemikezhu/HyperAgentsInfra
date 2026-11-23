@@ -6,7 +6,7 @@ resources and does not start vLLM or load model weights.
 
 ## Before running
 
-The model-specific `source_shas.env` pins the three reviewed adaptation commits.
+The model-specific `source_shas.env` pins each method's reviewed adaptation commit.
 Fetch those commits on Mila, then run `prepare_worktrees.sh` there.
 Do not use the repository-root 27B pins for these experiments.
 
@@ -42,8 +42,10 @@ root, passing `long-run-start <segment-end>` or `long-run-resume <segment-end>`.
 The optional `--generation_limit N` is the global search endpoint, separate from
 the segment endpoint. A fourth positional argument to the launcher (after the
 profile, phase and endpoint) can select one of the existing token budgets.
-Each submission runs one explicitly chosen segment; it does not submit a chain
-or start the other profiles. Do not launch all profiles concurrently until the
+For the original, structured-history and GVF profiles, each submission runs one
+explicitly chosen segment; it does not submit a chain or start the other profiles.
+GVF-MAP retains its existing automatic round continuation, as described below.
+Do not launch all profiles concurrently until the
 shared API's permitted usage has been established.
 
 The wrappers request `unkillable-cpu`, 2 CPUs, 8 GB and 12 hours. Formal evaluation
@@ -57,6 +59,49 @@ It uses independent initial evaluations, outputs and private checkpoint records.
 It records the endpoint, source SHA, tokenizer hashes and SIF hash without the
 key, and requires the same inference configuration on resume. Flash-Next and
 27B results are separate backbone conditions.
+
+## GVF-MAP
+
+GVF-MAP uses its own `remote-api/gvf-map-hyperagents` source branch and
+`GVF_MAP_SHA`. Its experiment worktree is prepared by the same script above;
+the existing profiles and their source pins are unchanged. The remote client,
+offline tokenizer and Singularity adaptation are reused from remote GVF, while
+the MAP search, prompts, structured QA and call-level token accounting are retained.
+
+From the Infra repository root on Mila:
+
+```bash
+sbatch mila/paper-review/qwen3.8-flash-next-fp8/gvf_map/smoke.sh
+sbatch mila/paper-review/qwen3.8-flash-next-fp8/gvf_map/long_run.sh
+```
+
+These are separate runs; choose which to submit. The smoke uses a fresh output
+ending in `_smoke`, two islands, one step per round, capacity two, two train/val/test
+samples, one test repeat and a global 6M token limit (1M/3M/6M checkpoints).
+It first runs one round, then resumes within the same job, following Nibi's MAP smoke.
+
+The long run retains two islands, five steps per round, capacity eight, one
+re-evaluation per step, alpha 0.2, beta 0.1, four candidate questions, at most two
+MAP features with at most three options/bins, lineage depth three and one migrant.
+It uses 10 train samples, 50 validation samples and 50 test samples repeated three
+times. Evaluation uses one worker per island, as in the other Mila profiles;
+the two islands can still issue concurrent API requests.
+
+The global search limit is **192M tokens summed across both islands**, with
+6M/12M/24M/48M/96M/192M token and 2/4/6/8/10/12-hour checkpoints. It does not add
+generation/attempt checkpoints. Each job completes at most one round and submits
+its continuation with `afterok` until search and held-out tests are complete.
+Checkpoint recommendations are frozen during search; tests run after search stops.
+After a failed job, resume the same long run explicitly:
+
+```bash
+sbatch mila/paper-review/qwen3.8-flash-next-fp8/gvf_map/long_run.sh long-run-resume
+```
+
+Resume uses MAP's private `state.json` and the existing inference-configuration
+check, not the older profiles' single generation archive. Both new wrappers use
+the existing Mila 2-CPU / 8-GB / 12-hour template; MAP's actual memory and round
+duration still require measurement. No GPU or local model service is requested.
 
 ## Model settings and remaining validation
 
@@ -73,6 +118,11 @@ The configured 262144 context limit must match Cairn's actual deployment. The
 earlier basic, tool-roundtrip and small grammar tests do not verify the complete
 sampling combination, thinking caps, actual QA/parent grammars, multi-turn
 tokenization or complete container execution. These remain deployment checks;
+GVF-MAP additionally requires the actual MAP QA JSON schema to be accepted by
+the endpoint, including multi-turn evidence reads and the existing one-correction
+path. A small grammar test alone does not verify this. No remote API, container
+or Slurm run was performed for the MAP migration; validation was static only.
+As with the other profiles,
 the scripts do not automatically probe the service, drop unsupported fields,
 substitute another model or switch to local inference.
 

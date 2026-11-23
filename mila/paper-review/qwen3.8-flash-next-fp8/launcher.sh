@@ -39,6 +39,7 @@ readonly -a search_hour_checkpoints=(2 4 6 8 10 12)
 
 usage() {
     echo "Usage: $0 <profile> long-run-start|long-run-resume <segment-end> [stop-token-budget] [--generation_limit N] [--early_stop true|false] [--early_stop_min_generations N] [--early_stop_patience N]" >&2
+    echo "GVF-MAP: $0 gvf_map long-run-start|long-run-resume 1 192000000, or $0 gvf_map map-smoke" >&2
 }
 
 configure_profile() {
@@ -59,6 +60,7 @@ configure_profile() {
             ;;
         original-compressed10) expected_source_sha="$common_base_sha" ;;
         structured_history) expected_source_sha="$STRUCTURED_HISTORY_SHA" ;;
+        gvf_map) expected_source_sha="${GVF_MAP_SHA:?Freeze the reviewed remote-api/gvf-map-hyperagents commit}" ;;
         gvf_lambda1_sibling0|gvf_lambda5_sibling0|gvf_lambda10_sibling0)
             expected_source_sha="$gvf_sha"
             use_gvf=1
@@ -77,6 +79,9 @@ configure_profile() {
     esac
     worktree_path="$experiment_root/paper-review-${requested_profile}-qwen38-flash-next-fp8-cairn/source"
     run_id="paper_review_${requested_profile//-/_}_qwen38_flash_next_fp8_cairn_long_run1"
+    if [[ "$requested_profile" == gvf_map && "$phase" == map-smoke ]]; then
+        run_id="paper_review_gvf_map_qwen38_flash_next_fp8_cairn_smoke"
+    fi
     run_output="$worktree_path/outputs/generate_${run_id}"
     private_output="${run_output}_private"
     train_baseline="$worktree_path/outputs/initial_paper_review_filtered_100_train_0"
@@ -294,6 +299,10 @@ generation_limit="${5:-$generation_limit}"
 configure_profile "$profile"
 
 case "$phase" in
+    map-smoke)
+        [[ "$profile" == gvf_map && "$#" -eq 2 ]] || { usage >&2; exit 2; }
+        readonly max_generation_target=1
+        ;;
     long-run-start|long-run-resume)
         if [[ "$#" -lt 3 || ! "$3" =~ ^[1-9][0-9]*$ ]]; then
             echo "ERROR: $phase requires a positive segment endpoint and optional token/generation limits." >&2
@@ -372,7 +381,18 @@ if [[ ! -r "$HYPERAGENTS_TOKENIZER_PATH/tokenizer_config.json" || ! -r "$HYPERAG
     exit 1
 fi
 
-if [[ "$phase" == long-run-start ]]; then
+if [[ "$profile" == gvf_map ]]; then
+    case "$phase" in
+        long-run-start|map-smoke)
+            [[ ! -e "$run_output" && ! -e "$private_output" ]] || {
+                echo "ERROR: GVF-MAP start output already exists; use a fresh smoke output or long-run-resume." >&2; exit 1;
+            }
+            ;;
+        long-run-resume)
+            [[ -f "$private_output/state.json" ]] || { echo "ERROR: GVF-MAP state missing." >&2; exit 1; }
+            ;;
+    esac
+elif [[ "$phase" == long-run-start ]]; then
     for path in "$run_output" "$private_output" "$train_baseline" "$val_baseline"; do
         if [[ -e "$path" ]]; then
             echo "ERROR: new-run output already exists: $path" >&2
@@ -452,6 +472,50 @@ echo "PHASE=$phase"
 echo "SOURCE_SHA=$expected_source_sha"
 echo "MODEL=$model"
 echo "RUN_OUTPUT=$run_output"
+
+if [[ "$profile" == gvf_map ]]; then
+    # Reuse the Nibi MAP protocol with the existing Mila inference environment.
+    map_args=(
+        --output_dir "$run_output"
+        --apptainer_image "$HYPERAGENTS_APPTAINER_IMAGE"
+        --eval_subset _filtered_100_train --seed "$eval_seed_base" --eval_workers "$eval_workers"
+        --islands 2 --steps_per_round 5 --capacity 8 --reevaluations 1
+        --alpha 0.2 --beta 0.1 --max_questions 4 --max_features 2 --max_options 3
+        --lineage_depth 3 --migrants 1 --train_samples 10 --val_samples 50
+        --test_samples 50 --test_repeats 3 --stop_token_budget 192000000
+        --token_checkpoints "${token_budgets[@]}"
+        --hour_checkpoints "${search_hour_checkpoints[@]}"
+    )
+    if [[ "$phase" == map-smoke ]]; then
+        map_args+=(--steps_per_round 1 --capacity 2 --train_samples 2 --val_samples 2
+                   --test_samples 2 --test_repeats 1 --stop_token_budget 6000000
+                   --token_checkpoints 1000000 3000000 6000000)
+        "$VIRTUAL_ENV/bin/python" generate_map_loop.py "${map_args[@]}" --max_rounds_this_job 1
+        "$VIRTUAL_ENV/bin/python" generate_map_loop.py "${map_args[@]}"
+    else
+        "$VIRTUAL_ENV/bin/python" generate_map_loop.py "${map_args[@]}" --max_rounds_this_job 1
+    fi
+    "$VIRTUAL_ENV/bin/python" - "$private_output/state.json" <<'PYMAP'
+import json, sys
+state = json.load(open(sys.argv[1]))
+print('GVF_MAP_STATUS:', state['status'], 'round:', state['round'], 'attempts:', state['attempts'])
+if state['status'] == 'finished':
+    pending = [key for key, value in state['checkpoints'].items() if value['test_status'] == 'pending']
+    if pending:
+        raise SystemExit('Held-out tests incomplete; resume the same run: ' + ', '.join(pending))
+PYMAP
+    [[ -z "$(git -C "$worktree_path" status --porcelain)" ]] || {
+        echo "ERROR: source worktree changed." >&2; exit 1;
+    }
+    map_status="$("$VIRTUAL_ENV/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$private_output/state.json")"
+    if [[ "$phase" != map-smoke && "$map_status" != finished ]]; then
+        cd "$launcher_dir/../../.."
+        next_job_id="$(sbatch --parsable --dependency="afterok:$SLURM_JOB_ID" \
+            "$launcher_dir/gvf_map/long_run.sh" long-run-resume)"
+        echo "GVF_MAP_CONTINUATION_JOB=${next_job_id%%;*}"
+    fi
+    exit 0
+fi
 
 generate_args=(
     --domains paper_review

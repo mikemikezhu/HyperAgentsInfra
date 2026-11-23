@@ -9,8 +9,9 @@ source "$script_dir/source_shas.env"
 : "${COMMON_BASE_SHA:?Fill the reviewed main adaptation commit}"
 : "${GVF_SHA:?Fill the reviewed GVF adaptation commit}"
 : "${STRUCTURED_HISTORY_SHA:?Fill the reviewed structured-history adaptation commit}"
+: "${GVF_MAP_SHA:?Fill the reviewed GVF-MAP adaptation commit}"
 
-for revision in "$COMMON_BASE_SHA" "$GVF_SHA" "$STRUCTURED_HISTORY_SHA"; do
+for revision in "$COMMON_BASE_SHA" "$GVF_SHA" "$STRUCTURED_HISTORY_SHA" "$GVF_MAP_SHA"; do
     if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
         echo "ERROR: source pins must be full commit SHAs" >&2
         exit 1
@@ -23,6 +24,7 @@ for script in "$script_dir"/*/long_run.sh; do
     case "$profile" in
         original-full|original-compressed10) revision="$COMMON_BASE_SHA" ;;
         structured_history) revision="$STRUCTURED_HISTORY_SHA" ;;
+        gvf_map) revision="$GVF_MAP_SHA" ;;
         gvf_*) revision="$GVF_SHA" ;;
         *) echo "ERROR: unknown profile: $profile" >&2; exit 1 ;;
     esac
