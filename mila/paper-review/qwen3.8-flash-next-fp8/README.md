@@ -118,7 +118,7 @@ Submit the single smoke from the Infra root:
 sbatch mila/paper-review/qwen3.8-flash-next-fp8/gvf_map/smoke.sh
 ```
 
-This separate 12-hour job writes to an output ending in `_smoke`. It runs two
+This separate 2-hour job writes to an output ending in `_smoke`. It runs two
 islands, one step per round, capacity two, two samples for each of train,
 validation and test, and one test repeat. The two islands share a 6M search
 token stop threshold and freeze recommendations at 1M/3M/6M. The smoke takes
