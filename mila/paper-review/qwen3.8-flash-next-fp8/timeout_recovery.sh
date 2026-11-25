@@ -28,8 +28,7 @@ for ((attempt=0; attempt<45; attempt++)); do
     esac
     case "$state" in
         TIMEOUT)
-            job="$(sbatch --parsable --kill-on-invalid-dep=yes --dependency="afterok:$SLURM_JOB_ID" \
-                "$wrapper" "$profile" long-run-recover "$parent")"
+            job="$("$wrapper" --submit-afterok "$profile" long-run-recover "$parent")"
             echo "TIMEOUT_PARENT=$parent RECOVERY_JOB=$job"
             exit 0 ;;
         ""|PENDING|RUNNING|COMPLETING|CONFIGURING|SUSPENDED) sleep 5 ;;

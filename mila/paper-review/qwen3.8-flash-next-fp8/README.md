@@ -60,12 +60,13 @@ finish beyond 192M. Recommendations use only evaluations eligible at each thresh
 A threshold with no eligible recommendation is reported as unavailable and cannot
 be completed with a later version.
 
-The common token-run wrapper requests 36 hours on `unkillable-cpu`, 2 CPUs and 8 GB, with
-one evaluation worker (one per island for MAP). Submit a profile once from the
-Infra root, for example:
+Token runs request 36 hours and 8 GB on `unkillable-cpu`. The original and
+compressed baselines request 1 CPU each. The other profiles request 2 CPUs.
+Each has one evaluation worker (one per island for MAP). From the Infra root,
+invoke the wrapper directly so it can select the CPU count before calling Slurm:
 
 ```bash
-sbatch mila/paper-review/qwen3.8-flash-next-fp8/token_run.sh gvf_lambda5_sibling0
+mila/paper-review/qwen3.8-flash-next-fp8/token_run.sh --submit original-full
 ```
 
 Within the allocation the launcher repeatedly advances one generation or one MAP
@@ -96,7 +97,7 @@ released after a verified unit. MAP resumes its native island operations and
 completed held-out repeats. GVF history updates and MAP question artifacts become
 visible only after a complete write. An outstanding API request may have to run again.
 
-Use `token_run.sh <profile>` for all nine token profiles. `gvf_map/long_run.sh`
+Use `token_run.sh --submit <profile>` for all nine token profiles. `gvf_map/long_run.sh`
 also starts the MAP token run. The eight single-island `<profile>/long_run.sh`
 scripts retain their published 12-hour generation/wallclock settings. As before,
 use separate prepared experiment roots for independent runs of the same

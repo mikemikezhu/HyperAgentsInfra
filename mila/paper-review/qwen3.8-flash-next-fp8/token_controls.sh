@@ -3,8 +3,7 @@ submit_continuation() {
     # Wrappers locate the shared launcher relative to SLURM_SUBMIT_DIR.
     local next_job_id
     cd "$launcher_dir/../../.."
-    next_job_id="$(sbatch --parsable --kill-on-invalid-dep=yes --dependency="afterok:$SLURM_JOB_ID" \
-        "$launcher_dir/token_run.sh" "$profile" long-run-resume "$SLURM_JOB_ID")"
+    next_job_id="$("$launcher_dir/token_run.sh" --submit-afterok "$profile" long-run-resume "$SLURM_JOB_ID")"
     echo "CONTINUATION_JOB=${next_job_id%%;*} PROFILE=$profile"
 }
 
