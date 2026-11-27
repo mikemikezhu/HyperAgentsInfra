@@ -61,6 +61,7 @@ usage() {
         "  $0 <profile> checkpoint-smoke" \
         "  $0 <profile> long-run-start <segment-end> [stop-token-budget [generation-limit]]" \
         "  $0 <profile> long-run-resume <segment-end> [stop-token-budget [generation-limit]]" \
+        "  $0 <profile> long-run-recover <segment-end> <stop-token-budget> [generation-limit]" \
         "  $0 summary" \
         "Formal options: --generation_limit N --early_stop true|false --early_stop_min_generations N --early_stop_patience N" \
         "" \
@@ -242,7 +243,7 @@ configure_profile() {
 
     if [[ "${phase:-}" == "checkpoint-smoke" ]]; then
         run_id="${run_id}_checkpoint_T${checkpoint_smoke_budget}"
-    elif [[ "${phase:-}" == "long-run-start" || "${phase:-}" == "long-run-resume" ]]; then
+    elif [[ "${phase:-}" == "long-run-start" || "${phase:-}" == "long-run-resume" || "${phase:-}" == "long-run-recover" ]]; then
         run_id="${run_id%_smoke5}_long_run1"
     fi
 
@@ -374,7 +375,7 @@ for genid in range(1, completed_genid + 1):
     ):
         valid_candidates.append(genid)
 
-if not valid_candidates and not stop_budget and phase not in ("long-run-start", "long-run-resume"):
+if not valid_candidates and not stop_budget and phase not in ("long-run-start", "long-run-resume", "long-run-recover"):
     raise SystemExit(
         "Search completed, but no currently valid evaluated generation has "
         "a non-empty canonical model_patch.diff."
@@ -411,7 +412,7 @@ last_generation = archive["current_genid"]
 completed = 0 if last_generation == "initial" else int(last_generation)
 cumulative = cumulative_total(scan_generation_token_totals(run_output))
 dimensions = [("T", list(map(int, tokens.split())), cumulative, "evaluation_cost_tokens", 1)]
-if phase in ("long-run-start", "long-run-resume"):
+if phase in ("long-run-start", "long-run-resume", "long-run-recover"):
     with open(os.path.join(private_dir, "search_time.json"), encoding="utf-8") as handle:
         search_seconds = json.load(handle)["search_seconds"]
     dimensions += [
@@ -439,7 +440,7 @@ for prefix, budgets, reached, field, scale in dimensions:
         if not checkpoint_tests_complete(private_dir, checkpoint, ["imo_grading"]):
             raise SystemExit(f"Reached checkpoint has incomplete isolated held-out tests: {checkpoint_path}")
         reached_count += 1
-if reached_count == 0 and not stop_budget and phase not in ("long-run-start", "long-run-resume"):
+if reached_count == 0 and not stop_budget and phase not in ("long-run-start", "long-run-resume", "long-run-recover"):
     raise SystemExit(f"No checkpoint was reached by generation {max_genid}.")
 if early_stop == "true" and stop_status == "stopped":
     final = read_final_checkpoint(run_output)
@@ -520,10 +521,11 @@ early_stop="false"
 early_stop_min_generations="10"
 early_stop_patience="5"
 generation_limit=""
+token_parent_job=""
 positional_args=()
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
-        --early_stop|--early_stop_min_generations|--early_stop_patience|--generation_limit)
+        --early_stop|--early_stop_min_generations|--early_stop_patience|--generation_limit|--token_parent_job)
             option="$1"
             if [[ "$#" -lt 2 ]]; then
                 echo "ERROR: $option requires a value" >&2
@@ -540,6 +542,7 @@ while [[ "$#" -gt 0 ]]; do
                 --early_stop_min_generations) early_stop_min_generations="$2" ;;
                 --early_stop_patience) early_stop_patience="$2" ;;
                 --generation_limit) generation_limit="$2" ;;
+                --token_parent_job) token_parent_job="$2" ;;
             esac
             shift 2
             ;;
@@ -579,7 +582,7 @@ case "$phase" in
             exit 2
         fi
         ;;
-    long-run-start|long-run-resume)
+    long-run-start|long-run-resume|long-run-recover)
         if [[ "$#" -lt 3 || ! "$3" =~ ^[1-9][0-9]*$ ]]; then
             echo "ERROR: $phase requires a positive segment endpoint and optional token/generation limits." >&2
             usage >&2
@@ -610,7 +613,7 @@ case "$phase" in
         ;;
 esac
 
-if [[ "$phase" != long-run-start && "$phase" != long-run-resume ]]; then
+if [[ "$phase" != long-run-start && "$phase" != long-run-resume && "$phase" != long-run-recover ]]; then
     early_stop="false"
 elif [[ -z "$generation_limit" && -z "$stop_token_budget" ]]; then
     generation_limit="$max_generation_target"
@@ -628,7 +631,6 @@ fi
 
 checkpoint_budgets=()
 stop_args=()
-generation_limit_args=()
 for budget in "${token_budgets[@]}"
 do
     if [[ -z "$stop_token_budget" ]] || (( budget <= stop_token_budget )); then
@@ -638,8 +640,17 @@ done
 if [[ -n "$stop_token_budget" ]]; then
     stop_args=(--stop_token_budget "$stop_token_budget")
 fi
-if [[ -n "$generation_limit" ]]; then
-    generation_limit_args=("$generation_limit")
+
+token_mode=false
+if [[ -n "$stop_token_budget" && "$phase" == long-run-* ]]; then
+    token_mode=true
+    readonly token_helper_dir="$infra_root/common"
+    readonly token_wrapper="$launcher_dir/$profile/long_run.sh"
+    readonly token_domain="imo_grading"
+    source "$token_helper_dir/token_controls.sh"
+elif [[ "$phase" == long-run-recover || -n "$token_parent_job" ]]; then
+    echo "ERROR: automatic continuation/recovery requires a token budget." >&2
+    exit 2
 fi
 
 if [[ -z "${SLURM_JOB_ID:-}" || -z "${SLURM_TMPDIR:-}" ]]; then
@@ -678,6 +689,8 @@ if [[ ! -r "$apptainer_image" ]]; then
     echo "ERROR: Apptainer image is missing: $apptainer_image" >&2
     exit 1
 fi
+
+if [[ "$token_mode" == true ]]; then lock_token_run; fi
 
 if [[ "$phase" == "calibrate" ]]; then
     for path in "$run_output" "$private_output" "$train_baseline" "$val_baseline"
@@ -746,6 +759,11 @@ elif [[ "$phase" == "long-run-start" ]]; then
             exit 1
         fi
     done
+elif [[ "$token_mode" == true ]]; then
+    if [[ "$phase" != long-run-recover && ! -f "$run_output/archive.jsonl" ]]; then
+        echo "ERROR: no completed archive to resume: $run_output" >&2
+        exit 1
+    fi
 else
     if [[ ! -f "$run_output/archive.jsonl" ]]; then
         echo "ERROR: formal long-run output cannot be resumed: $run_output" >&2
@@ -853,6 +871,8 @@ vllm_command=(
     --tool-call-parser "qwen3_coder"
     --gdn-prefill-backend "triton"
 )
+
+if [[ "$token_mode" == true ]]; then arm_timeout_recovery; fi
 
 vllm_pid=""
 
@@ -962,7 +982,7 @@ fi
 
 checkpoint_args=()
 baseline_timer=()
-if [[ "$phase" == "long-run-start" || "$phase" == "long-run-resume" ]]; then
+if [[ "$phase" == "long-run-start" || "$phase" == "long-run-resume" || "$phase" == "long-run-recover" ]]; then
     checkpoint_args=(
         --generation_checkpoints "${generation_checkpoints[@]}"
         --search_hour_checkpoints "${search_hour_checkpoints[@]}"
@@ -990,7 +1010,12 @@ run_initial_baseline_split() {
     )"
 
     echo "Starting initial $split baseline with seed $seed at $(date --iso-8601=seconds)"
-    "${baseline_timer[@]}" "$VIRTUAL_ENV/bin/python" -m domains.harness \
+    local harness=(-m domains.harness)
+    if [[ "$token_mode" == true ]]; then
+        if [[ -f "$private_output/baseline-${split}.complete" ]]; then return; fi
+        harness=("$token_helper_dir/token_recovery.py" baseline "$run_output" --save_interval 1)
+    fi
+    "${baseline_timer[@]}" "$VIRTUAL_ENV/bin/python" "${harness[@]}" \
         --output_dir "$worktree_path/outputs" \
         --run_id "$baseline_name" \
         --domain imo_grading \
@@ -1005,6 +1030,7 @@ run_initial_baseline_split() {
     "${baseline_timer[@]}" "$VIRTUAL_ENV/bin/python" -m domains.report \
         --domain imo_grading \
         --dname "$worktree_path/outputs/$baseline_name"
+    if [[ "$token_mode" == true ]]; then touch "$private_output/baseline-${split}.complete"; fi
 }
 
 verify_generated_repository() {
@@ -1084,6 +1110,8 @@ if manifest.get("num_samples") != expected_count:
 print("INITIAL_VALIDATION_IS_LABEL_FREE")
 PY
 }
+
+if [[ "$token_mode" == true ]]; then run_token_search; exit 0; fi
 
 if [[ "$phase" == "calibrate" ]]; then
     run_initial_baseline_split train
@@ -1194,39 +1222,6 @@ if [[ -n "$(git -C "$worktree_path" status --porcelain)" ]]; then
     echo "ERROR: source worktree changed during the experiment." >&2
     git -C "$worktree_path" status --short --branch >&2
     exit 1
-fi
-
-if [[ -n "$stop_token_budget" ]]; then
-    cumulative_tokens="$(read_cumulative_tokens)"
-    if [[ "$early_stop" == true && "$(read_search_status)" == stopped ]]; then
-        echo "FORMAL_LONG_RUN_SEARCH_STOPPED_AND_TESTS_COMPLETED"
-    elif (( cumulative_tokens >= stop_token_budget )); then
-        echo "FORMAL_LONG_RUN_TOKEN_BUDGET_${stop_token_budget}_COMPLETED"
-    elif [[ -n "$generation_limit" ]] && (( max_generation_target >= generation_limit )); then
-        echo "FORMAL_LONG_RUN_GENERATION_LIMIT_${generation_limit}_COMPLETED"
-    else
-        case "$profile" in
-            original-full|gvf_*) next_generation_target="$((max_generation_target + 5))" ;;
-            *) next_generation_target="$((max_generation_target + 10))" ;;
-        esac
-        if [[ -n "$generation_limit" ]] && (( next_generation_target > generation_limit )); then
-            next_generation_target="$generation_limit"
-        fi
-        next_job_id="$(
-            cd "$infra_root"
-            sbatch \
-                --parsable \
-                --dependency="afterok:$SLURM_JOB_ID" \
-                --job-name="${SLURM_JOB_NAME%-g*}-g$((max_generation_target + 1))-$next_generation_target-q38" \
-                "$launcher_dir/$profile/long_run.sh" \
-                long-run-resume \
-                "$next_generation_target" \
-                "$stop_token_budget" \
-                "${generation_limit_args[@]}" \
-                "${early_stop_args[@]}"
-        )"
-        echo "TOKEN_BUDGET_CONTINUATION_JOB=${next_job_id%%;*}"
-    fi
 fi
 
 echo "Finished at $(date --iso-8601=seconds)"

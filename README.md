@@ -39,8 +39,43 @@ On Nibi, Rorqual and Fir, A1/A3/A4 run five generations per job and request
 five generations per job and 24 hours for all methods. [TamIA](tamia/README.md)
 uses eight H200 GPUs, TP=8, 50 evaluation workers and eight generations per
 24-hour job for all methods. The first job also runs generation 0.
-These segment sizes apply to both generation-limited chains and
-token-budget continuations.
+These segment sizes apply to generation-limited chains. Nibi, Fir and Rorqual
+token-budget runs use the allocation loop described below. Trillium and TamIA
+retain their existing submission paths.
+
+### Token-budget allocations on Nibi, Fir and Rorqual
+
+Keep using each method's existing `long_run.sh` with `--stop_token_budget`;
+Nibi Paper Review GVF-MAP keeps its `sbatch .../gvf_map/long_run.sh` entry.
+GPU/CPU/memory/account/time requests, model settings, source pins, output paths,
+checkpoint schedules and three-repeat held-out tests are unchanged. Explicit
+generation limits and early-stopping parameters also remain in effect.
+
+The launcher starts local vLLM once per allocation and advances one generation
+at a time, or one round for GVF-MAP. It continues in the same allocation when
+Slurm's remaining time covers 1.25 times the slower of the last two units.
+Otherwise it submits the same profile with `afterok` and exits normally.
+Once search and the required held-out tests are complete, it exits immediately.
+This loop follows Mila's token-run implementation (`26376e4`); it does not
+change smoke or generation-only submission. The single-generation invocation
+passes `iterations_left=0`, as on Mila. Seed MetaAgents ignore that argument;
+evolved MetaAgents may use it.
+
+Before starting vLLM, each token allocation registers a five-minute, one-CPU,
+1-GB watcher via `afternotok` and `--kill-on-invalid-dep=yes`, using the
+profile's configured account and the cluster's default CPU scheduling. Only a confirmed
+`TIMEOUT` submits a `long-run-recover` GPU job, dependent on the watcher's success.
+Cancellation and other failures do not automatically restart. The run lock and
+predecessor job ID prevent stale continuations from writing to a newer run.
+
+The shared `common/` helpers are ported from Mila. They preserve completed
+mutation/evaluation stages, initial predictions, QA writes and recorded token
+usage under the existing shared-scratch private output. A killed, unfinished
+stage can run again. MAP uses its existing operation/state recovery. Snapshots
+are released after a completed unit. The recovery adapter is loaded only in
+token-run processes; it does not edit pinned source files. Task domains and
+stopping/checkpoint parameters are supplied by the existing launcher rather
+than adopting Mila's fixed Paper Review/192M configuration.
 
 Each Paper Review `long_run.sh` disables validation early stopping by default,
 with a global cap of 30 generations. If explicitly enabled, early stopping uses

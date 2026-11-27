@@ -11,4 +11,6 @@
 set -euo pipefail
 # One shared model service; two independent search processes. 192M is global.
 readonly launcher="${SLURM_SUBMIT_DIR:?Submit from HyperAgentsInfra}/nibi/paper-review/qwen3.8-27b/launcher.sh"
-exec "$launcher" gvf_map "${1:-long-run-start}" 1 192000000
+phase="${1:-long-run-start}"
+if (( $# > 0 )); then shift; fi
+exec "$launcher" gvf_map "$phase" 1 192000000 "$@"
